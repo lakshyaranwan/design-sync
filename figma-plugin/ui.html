@@ -1,0 +1,340 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #2b6cff;
+    --accent-fg: #ffffff;
+    --warn-bg: #fff8e1;
+    --warn-border: #f5c518;
+    --warn-fg: #5a4500;
+    --err: #c81e1e;
+    --ok: #137333;
+    --approx: #b26a00;
+    --panel: #fafafa;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: Inter, -apple-system, system-ui, sans-serif; font-size: 12px; color: var(--fg); background: var(--bg); }
+  .app { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
+  .panel { padding: 12px; overflow: auto; border-right: 1px solid var(--border); }
+  .panel:last-child { border-right: none; }
+  h2 { margin: 0 0 10px; font-size: 13px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; }
+  input[type=file], input[type=number], input[type=text], select {
+    font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); width: 100%;
+  }
+  button {
+    font: inherit; padding: 6px 12px; border: 1px solid var(--border); background: var(--bg); border-radius: 4px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .field { margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 8px; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; position: sticky; top: 0; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 10.5px; }
+  .status-ok { color: var(--ok); }
+  .status-approx { color: var(--approx); }
+  .status-missing { color: var(--err); font-weight: 600; }
+  .warn {
+    background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-fg);
+    padding: 6px 8px; border-radius: 4px; margin-top: 8px; font-size: 11px;
+  }
+  .err { background: #fde8e8; border: 1px solid #f8b4b4; color: var(--err); padding: 6px 8px; border-radius: 4px; margin-top: 8px; font-size: 11px; }
+  #log {
+    font-family: var(--mono); font-size: 11px; background: #0f172a; color: #e5e7eb;
+    padding: 8px; border-radius: 4px; height: 180px; overflow: auto; white-space: pre-wrap; margin-top: 8px;
+  }
+  #summary {
+    margin-top: 8px; padding: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    display: none; font-size: 11px;
+  }
+  .pres { display: flex; gap: 4px; flex-wrap: wrap; }
+  .pres button { padding: 4px 8px; font-size: 11px; }
+  .pres button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  .size-custom { display: flex; gap: 6px; margin-top: 6px; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <section class="panel">
+    <h2>1. Import</h2>
+
+    <div class="field">
+      <label>Screen JSX (.jsx) — required</label>
+      <input type="file" id="jsxFile" accept=".jsx,.tsx,.txt" />
+    </div>
+
+    <div class="field">
+      <label>Usage manifest (.usage.json) — required</label>
+      <input type="file" id="usageFile" accept=".json" />
+    </div>
+
+    <div class="row">
+      <button class="primary" id="parseBtn" disabled>Parse</button>
+      <span id="parseStatus" style="color: var(--muted)"></span>
+    </div>
+
+    <div id="parseErrors"></div>
+
+    <div id="previewWrap" style="display:none">
+      <table id="preview">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th class="mono">Variant Path</th>
+            <th class="mono">Figma Node ID</th>
+            <th>Count</th>
+            <th>Library Status</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="missingNote" class="warn" style="display:none">
+        Some components will be placed as dashed placeholder frames.
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>2. Placement</h2>
+
+    <div class="field">
+      <label>Target frame</label>
+      <select id="targetFrame">
+        <option value="__new__">Create new frame</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Frame size</label>
+      <div class="pres" id="presets">
+        <button data-w="360" data-h="820">Mobile 360×820</button>
+        <button data-w="375" data-h="812" class="active">Mobile 375×812</button>
+        <button data-w="768" data-h="1024">iPad 768×1024</button>
+        <button data-w="1280" data-h="800">Desktop 1280×800</button>
+        <button data-w="" data-h="">Custom</button>
+      </div>
+      <div class="size-custom">
+        <input type="number" id="frameW" value="375" min="64" max="10000" />
+        <input type="number" id="frameH" value="812" min="64" max="10000" />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Mode</label>
+      <div class="pres" id="modes">
+        <button data-mode="Light" class="active">Light</button>
+        <button data-mode="Dark">Dark</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="buildBtn" disabled>Build screen</button>
+      <button id="zoomBtn" disabled>Zoom to frame</button>
+    </div>
+
+    <div class="actions">
+      <button id="resyncBtn">Re-sync selected frame</button>
+      <button id="auditBtn">Audit selected frame</button>
+      <button id="reverseBtn">Reverse export</button>
+    </div>
+
+    <div id="log"></div>
+
+    <div id="summary"></div>
+  </section>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  let jsxText = null;
+  let usageText = null;
+  let parsed = null; // { manifest, instructions, preview }
+  let lastFrameId = null;
+  let mode = 'Light';
+  let size = { w: 375, h: 812 };
+
+  function log(line, cls) {
+    const el = $('log');
+    const span = document.createElement('div');
+    if (cls) span.style.color = cls;
+    span.textContent = line;
+    el.appendChild(span);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function send(type, payload) {
+    parent.postMessage({ pluginMessage: { type, payload } }, '*');
+  }
+
+  function readFile(input) {
+    return new Promise((resolve, reject) => {
+      const f = input.files && input.files[0];
+      if (!f) return resolve(null);
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsText(f);
+    });
+  }
+
+  function refreshParseEnabled() {
+    $('parseBtn').disabled = !(jsxText && usageText);
+  }
+
+  $('jsxFile').addEventListener('change', async (e) => {
+    jsxText = await readFile(e.target);
+    refreshParseEnabled();
+  });
+  $('usageFile').addEventListener('change', async (e) => {
+    usageText = await readFile(e.target);
+    refreshParseEnabled();
+  });
+
+  $('parseBtn').addEventListener('click', () => {
+    $('parseErrors').innerHTML = '';
+    if (!usageText) {
+      $('parseErrors').innerHTML = '<div class="err">usage.json required. The JSX data-ds-* attributes will be used as fallback but accuracy is reduced. Drop usage.json to continue.</div>';
+      return;
+    }
+    send('parse', { jsxText, usageText });
+  });
+
+  $('buildBtn').addEventListener('click', () => {
+    if (!parsed) return;
+    $('log').innerHTML = '';
+    $('summary').style.display = 'none';
+    send('build', {
+      targetFrameId: $('targetFrame').value,
+      width: Number($('frameW').value) || 375,
+      height: Number($('frameH').value) || 812,
+      mode,
+    });
+  });
+
+  $('zoomBtn').addEventListener('click', () => {
+    if (lastFrameId) send('zoom', { frameId: lastFrameId });
+  });
+
+  $('resyncBtn').addEventListener('click', () => send('resync', {}));
+  $('auditBtn').addEventListener('click', () => send('audit', {}));
+  $('reverseBtn').addEventListener('click', () => send('reverse', {}));
+
+  // Preset buttons
+  document.querySelectorAll('#presets button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#presets button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      if (b.dataset.w) {
+        $('frameW').value = b.dataset.w;
+        $('frameH').value = b.dataset.h;
+      }
+    });
+  });
+  document.querySelectorAll('#modes button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#modes button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      mode = b.dataset.mode;
+    });
+  });
+
+  // Ask main for frames on load
+  send('init', {});
+
+  window.onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    if (!msg) return;
+    const { type, payload } = msg;
+
+    if (type === 'frames') {
+      const sel = $('targetFrame');
+      sel.innerHTML = '<option value="__new__">Create new frame</option>';
+      (payload.frames || []).forEach((f) => {
+        const o = document.createElement('option');
+        o.value = f.id;
+        o.textContent = f.name;
+        sel.appendChild(o);
+      });
+      if (!payload.librariesConnected) {
+        $('parseErrors').innerHTML =
+          '<div class="err">No design libraries connected. Go to Assets → Libraries and enable the Sen Money design library before running this plugin.</div>';
+      }
+    }
+
+    if (type === 'parsed') {
+      parsed = payload;
+      $('parseStatus').textContent = `${payload.preview.length} entries`;
+      $('previewWrap').style.display = '';
+      const tbody = $('preview').querySelector('tbody');
+      tbody.innerHTML = '';
+      let missingCount = 0;
+      payload.preview.forEach((row) => {
+        const tr = document.createElement('tr');
+        const statusCls =
+          row.status === 'exact' ? 'status-ok' :
+          row.status === 'name' ? 'status-approx' : 'status-missing';
+        const statusText =
+          row.status === 'exact' ? '✓ Found' :
+          row.status === 'name' ? '~ Found (name)' : '✗ Missing';
+        if (row.status === 'missing') missingCount++;
+        tr.innerHTML = `
+          <td>${row.component}</td>
+          <td class="mono">${row.variantPath}</td>
+          <td class="mono">${row.figmaNodeId || ''}</td>
+          <td>${row.count}</td>
+          <td class="${statusCls}">${statusText}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      $('missingNote').style.display = missingCount > 0 ? '' : 'none';
+      $('missingNote').textContent =
+        `${missingCount} component(s) will be placed as a placeholder frame.`;
+      $('buildBtn').disabled = false;
+
+      if (payload.warnings && payload.warnings.length) {
+        const w = document.createElement('div');
+        w.className = 'warn';
+        w.textContent = payload.warnings.join(' · ');
+        $('parseErrors').appendChild(w);
+      }
+    }
+
+    if (type === 'log') {
+      log(payload.line, payload.color);
+    }
+
+    if (type === 'built') {
+      lastFrameId = payload.frameNodeId;
+      $('zoomBtn').disabled = false;
+      const s = $('summary');
+      s.style.display = '';
+      s.innerHTML =
+        `<strong>Built:</strong> ${payload.exactMatch + payload.nameMatch} components · ` +
+        `<strong>Missing:</strong> ${payload.missing.length} · ` +
+        `<strong>Approx:</strong> ${payload.approximate.length}`;
+    }
+
+    if (type === 'error') {
+      const d = document.createElement('div');
+      d.className = 'err';
+      d.textContent = payload.message;
+      $('parseErrors').appendChild(d);
+    }
+  };
+</script>
+</body>
+</html>
