@@ -177,23 +177,30 @@ function buildInstructions(
     (hintQueueByComponent[h.component] ||= []).push(h);
   }
 
+  // Contract: usage.json is the SINGLE SOURCE OF TRUTH for variantPath and
+  // figmaNodeId. JSX data-ds-* attributes are diagnostic only — when they
+  // disagree, that indicates an upstream generator bug (the JSX and manifest
+  // were produced inconsistently). We surface the mismatch but DO NOT override.
   const enriched: PlacementInstruction[] = manifest.components.map((c, i) => {
     const queue = hintQueueByComponent[c.component];
     const hint = queue && queue.length ? queue.shift() : undefined;
 
-    let variantPath = c.variantPath;
     if (hint?.variant && hint.variant !== c.variantPath) {
       warnings.push(
-        `JSX data-ds-variant "${hint.variant}" overrides usage.json "${c.variantPath}" for ${c.component}`,
+        `Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`,
       );
-      variantPath = hint.variant;
     }
-    const figmaNodeId = hint?.nodeId || c.figmaNodeId;
+    if (hint?.nodeId && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
+      warnings.push(
+        `Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`,
+      );
+    }
 
     return {
       ...c,
-      variantPath,
-      figmaNodeId,
+      // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
+      variantPath: c.variantPath,
+      figmaNodeId: c.figmaNodeId || hint?.nodeId || '',
       widthHint: hint?.widthHint,
       heightHint: hint?.heightHint,
       globalOrder: i,
