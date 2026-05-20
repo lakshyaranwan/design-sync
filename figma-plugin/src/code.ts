@@ -177,23 +177,30 @@ function buildInstructions(
     (hintQueueByComponent[h.component] ||= []).push(h);
   }
 
+  // Contract: usage.json is the SINGLE SOURCE OF TRUTH for variantPath and
+  // figmaNodeId. JSX data-ds-* attributes are diagnostic only — when they
+  // disagree, that indicates an upstream generator bug (the JSX and manifest
+  // were produced inconsistently). We surface the mismatch but DO NOT override.
   const enriched: PlacementInstruction[] = manifest.components.map((c, i) => {
     const queue = hintQueueByComponent[c.component];
     const hint = queue && queue.length ? queue.shift() : undefined;
 
-    let variantPath = c.variantPath;
     if (hint?.variant && hint.variant !== c.variantPath) {
       warnings.push(
-        `JSX data-ds-variant "${hint.variant}" overrides usage.json "${c.variantPath}" for ${c.component}`,
+        `Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`,
       );
-      variantPath = hint.variant;
     }
-    const figmaNodeId = hint?.nodeId || c.figmaNodeId;
+    if (hint?.nodeId && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
+      warnings.push(
+        `Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`,
+      );
+    }
 
     return {
       ...c,
-      variantPath,
-      figmaNodeId,
+      // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
+      variantPath: c.variantPath,
+      figmaNodeId: c.figmaNodeId || hint?.nodeId || '',
       widthHint: hint?.widthHint,
       heightHint: hint?.heightHint,
       globalOrder: i,
@@ -389,10 +396,10 @@ async function buildScreen(
       currentSection = instr.placement.section;
       sectionFrame = figma.createFrame();
       sectionFrame.name = currentSection;
+      // Set auto-layout BEFORE appending children so FILL works on descendants.
       sectionFrame.layoutMode = 'VERTICAL';
       sectionFrame.counterAxisSizingMode = 'FIXED';
       sectionFrame.primaryAxisSizingMode = 'AUTO';
-      sectionFrame.layoutSizingHorizontal = 'FILL';
       sectionFrame.fills = [];
       if (currentSection === 'StickyFooter') {
         sectionFrame.paddingTop = 20;
@@ -401,7 +408,15 @@ async function buildScreen(
         sectionFrame.paddingRight = 20;
         sectionFrame.itemSpacing = 20;
       }
+      // Parent must be appended into its auto-layout container BEFORE we set
+      // layoutSizingHorizontal — that property is only valid on children of
+      // an auto-layout frame.
       frame.appendChild(sectionFrame);
+      try {
+        sectionFrame.layoutSizingHorizontal = 'FILL';
+      } catch (e) {
+        uiLog(`  ! section FILL failed: ${(e as Error).message}`, '#fbbf24');
+      }
       uiLog(`▸ section: ${currentSection}`, '#93c5fd');
     }
 
@@ -424,11 +439,11 @@ async function buildScreen(
       instance.setPluginData('ds-match-type', matchType);
       instance.setPluginData('ds-md-version', manifest.designMdVersion || '');
 
+      // Append FIRST, then set layoutSizingHorizontal (requires auto-layout parent).
+      sectionFrame.appendChild(instance);
       try {
         instance.layoutSizingHorizontal = 'FILL';
       } catch {}
-
-      sectionFrame.appendChild(instance);
 
       if (matchType === 'exact-id' || matchType === 'set-variant') {
         exactMatch++;
@@ -440,10 +455,10 @@ async function buildScreen(
       }
     } else if (sectionFrame) {
       const ph = await createMissingPlaceholder(instr);
+      sectionFrame.appendChild(ph);
       try {
         ph.layoutSizingHorizontal = 'FILL';
       } catch {}
-      sectionFrame.appendChild(ph);
       missing.push(instr.variantPath);
       uiLog(`    ✗ missing → placeholder`, '#fca5a5');
     }
