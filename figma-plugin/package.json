@@ -2,7 +2,7 @@
   "name": "sen-money-ds-mapper",
   "version": "0.1.0",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && mv src/code.js code.js",
     "watch": "tsc -p tsconfig.json -w"
   },
   "devDependencies": {

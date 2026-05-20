@@ -5,9 +5,8 @@
     "lib": ["ES2017", "DOM"],
     "strict": true,
     "esModuleInterop": true,
-    "typeRoots": ["./node_modules/@types", "./node_modules/@figma"],
-    "outDir": ".",
-    "rootDir": "src"
+    "typeRoots": ["./node_modules/@types", "./node_modules/@figma"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
 }
