@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 0,
+  "workspaces": {
+    "": {
+      "name": "sen-money-ds-mapper",
+      "devDependencies": {
+        "@figma/plugin-typings": "^1.100.0",
+        "typescript": "^5.5.0",
+      },
+    },
+  },
+  "packages": {
+    "@figma/plugin-typings": ["@figma/plugin-typings@1.126.0", "https://europe-west4-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/@figma/plugin-typings/-/plugin-typings-1.126.0.tgz", {}, "sha512-7Y8HPIHWgMUoT1L7InyUe5X6S+gPUSlVLi7TQvwnRev6PjDwwNkM/oSio2t69EvsJ+TRPSJSvO7xph+KHIcWeQ=="],
+
+    "typescript": ["typescript@5.9.3", "https://europe-west4-npm.pkg.dev/lovable-core-prod/sandbox-npm-cache/typescript/-/typescript-5.9.3.tgz", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+  }
+}

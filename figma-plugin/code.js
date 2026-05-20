@@ -102,17 +102,22 @@ function buildInstructions(manifest, hints) {
             continue;
         (hintQueueByComponent[_a = h.component] || (hintQueueByComponent[_a] = [])).push(h);
     }
+    // Contract: usage.json is the SINGLE SOURCE OF TRUTH for variantPath and
+    // figmaNodeId. JSX data-ds-* attributes are diagnostic only — when they
+    // disagree, that indicates an upstream generator bug (the JSX and manifest
+    // were produced inconsistently). We surface the mismatch but DO NOT override.
     const enriched = manifest.components.map((c, i) => {
         const queue = hintQueueByComponent[c.component];
         const hint = queue && queue.length ? queue.shift() : undefined;
-        let variantPath = c.variantPath;
         if ((hint === null || hint === void 0 ? void 0 : hint.variant) && hint.variant !== c.variantPath) {
-            warnings.push(`JSX data-ds-variant "${hint.variant}" overrides usage.json "${c.variantPath}" for ${c.component}`);
-            variantPath = hint.variant;
+            warnings.push(`Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`);
         }
-        const figmaNodeId = (hint === null || hint === void 0 ? void 0 : hint.nodeId) || c.figmaNodeId;
-        return Object.assign(Object.assign({}, c), { variantPath,
-            figmaNodeId, widthHint: hint === null || hint === void 0 ? void 0 : hint.widthHint, heightHint: hint === null || hint === void 0 ? void 0 : hint.heightHint, globalOrder: i });
+        if ((hint === null || hint === void 0 ? void 0 : hint.nodeId) && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
+            warnings.push(`Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`);
+        }
+        return Object.assign(Object.assign({}, c), { 
+            // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
+            variantPath: c.variantPath, figmaNodeId: c.figmaNodeId || (hint === null || hint === void 0 ? void 0 : hint.nodeId) || '', widthHint: hint === null || hint === void 0 ? void 0 : hint.widthHint, heightHint: hint === null || hint === void 0 ? void 0 : hint.heightHint, globalOrder: i });
     });
     // Stable sort: section-known-order, then orderInSection
     enriched.sort((a, b) => {
@@ -278,10 +283,10 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             currentSection = instr.placement.section;
             sectionFrame = figma.createFrame();
             sectionFrame.name = currentSection;
+            // Set auto-layout BEFORE appending children so FILL works on descendants.
             sectionFrame.layoutMode = 'VERTICAL';
             sectionFrame.counterAxisSizingMode = 'FIXED';
             sectionFrame.primaryAxisSizingMode = 'AUTO';
-            sectionFrame.layoutSizingHorizontal = 'FILL';
             sectionFrame.fills = [];
             if (currentSection === 'StickyFooter') {
                 sectionFrame.paddingTop = 20;
@@ -290,7 +295,16 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
                 sectionFrame.paddingRight = 20;
                 sectionFrame.itemSpacing = 20;
             }
+            // Parent must be appended into its auto-layout container BEFORE we set
+            // layoutSizingHorizontal — that property is only valid on children of
+            // an auto-layout frame.
             frame.appendChild(sectionFrame);
+            try {
+                sectionFrame.layoutSizingHorizontal = 'FILL';
+            }
+            catch (e) {
+                uiLog(`  ! section FILL failed: ${e.message}`, '#fbbf24');
+            }
             uiLog(`▸ section: ${currentSection}`, '#93c5fd');
         }
         uiLog(`  • ${instr.component} ${instr.variantPath}`);
@@ -308,11 +322,12 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             instance.setPluginData('ds-order', String(instr.globalOrder));
             instance.setPluginData('ds-match-type', matchType);
             instance.setPluginData('ds-md-version', manifest.designMdVersion || '');
+            // Append FIRST, then set layoutSizingHorizontal (requires auto-layout parent).
+            sectionFrame.appendChild(instance);
             try {
                 instance.layoutSizingHorizontal = 'FILL';
             }
             catch (_b) { }
-            sectionFrame.appendChild(instance);
             if (matchType === 'exact-id' || matchType === 'set-variant') {
                 exactMatch++;
                 uiLog(`    ✓ ${matchType}`, '#86efac');
@@ -325,11 +340,11 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
         }
         else if (sectionFrame) {
             const ph = await createMissingPlaceholder(instr);
+            sectionFrame.appendChild(ph);
             try {
                 ph.layoutSizingHorizontal = 'FILL';
             }
             catch (_c) { }
-            sectionFrame.appendChild(ph);
             missing.push(instr.variantPath);
             uiLog(`    ✗ missing → placeholder`, '#fca5a5');
         }
