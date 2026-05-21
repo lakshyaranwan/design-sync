@@ -243,16 +243,80 @@ function matchesVariantProps(
   return Object.keys(props).every((k) => vp[k] === props[k]);
 }
 
+function climbToComponentRoot(
+  node: BaseNode,
+): { type: 'COMPONENT' | 'COMPONENT_SET'; node: BaseNode } | null {
+  let cur: BaseNode | null = node;
+  while (cur) {
+    if (cur.type === 'COMPONENT' || cur.type === 'COMPONENT_SET') {
+      return { type: cur.type, node: cur };
+    }
+    cur = (cur as any).parent ?? null;
+  }
+  return null;
+}
+
+function pickVariantFromSet(
+  set: ComponentSetNode,
+  entry: PlacementInstruction,
+  mode: 'Light' | 'Dark',
+): ComponentNode | null {
+  const variantProps = parseVariantPath(entry.variantPath);
+  if (variantProps.Mode || (set.children[0] as any)?.variantProperties?.Mode) {
+    variantProps.Mode = mode;
+  }
+  const exact = (set.children as ComponentNode[]).find((c) =>
+    matchesVariantProps(c, variantProps),
+  );
+  if (exact) return exact;
+  // Partial match: highest overlap of variant keys
+  let best: { node: ComponentNode; score: number } | null = null;
+  for (const c of set.children as ComponentNode[]) {
+    const vp = (c as any).variantProperties as Record<string, string> | null;
+    if (!vp) continue;
+    let score = 0;
+    for (const k of Object.keys(variantProps)) if (vp[k] === variantProps[k]) score++;
+    if (!best || score > best.score) best = { node: c, score };
+  }
+  return best?.node ?? null;
+}
+
 async function resolveComponent(
   entry: PlacementInstruction,
   mode: 'Light' | 'Dark',
 ): Promise<{ node: ComponentNode | null; matchType: MatchType }> {
-  // 1. Exact node ID
+  // 1. Exact node ID — but if it points INSIDE a component (an inner layer),
+  // climb up to the enclosing COMPONENT / COMPONENT_SET so we instantiate the
+  // top-level component, not a nested frame/text/instance.
   if (entry.figmaNodeId) {
     try {
       const node = await figma.getNodeByIdAsync(entry.figmaNodeId);
-      if (node && node.type === 'COMPONENT') {
-        return { node: node as ComponentNode, matchType: 'exact-id' };
+      if (node) {
+        const root = climbToComponentRoot(node);
+        if (root?.type === 'COMPONENT') {
+          if (node.id !== root.node.id) {
+            uiLog(
+              `    ↑ node is inside component "${root.node.name}" — using parent`,
+              '#93c5fd',
+            );
+          }
+          const parent = (root.node as ComponentNode).parent;
+          if (parent && parent.type === 'COMPONENT_SET') {
+            const match = pickVariantFromSet(parent as ComponentSetNode, entry, mode);
+            if (match) return { node: match, matchType: 'set-variant' };
+          }
+          return { node: root.node as ComponentNode, matchType: 'exact-id' };
+        }
+        if (root?.type === 'COMPONENT_SET') {
+          const match = pickVariantFromSet(root.node as ComponentSetNode, entry, mode);
+          if (match) {
+            uiLog(
+              `    ↑ node is inside set "${root.node.name}" — picked variant "${match.name}"`,
+              '#93c5fd',
+            );
+            return { node: match, matchType: 'set-variant' };
+          }
+        }
       }
     } catch {}
   }
@@ -262,16 +326,12 @@ async function resolveComponent(
     try {
       const set = await figma.getNodeByIdAsync(entry.figmaComponentSetId);
       if (set && set.type === 'COMPONENT_SET') {
-        const variantProps = parseVariantPath(entry.variantPath);
-        // Apply mode override from UI selector
-        if (variantProps.Mode) variantProps.Mode = mode;
-        const match = (set.children as ComponentNode[]).find((c) =>
-          matchesVariantProps(c, variantProps),
-        );
+        const match = pickVariantFromSet(set as ComponentSetNode, entry, mode);
         if (match) return { node: match, matchType: 'set-variant' };
       }
     } catch {}
   }
+
 
   // 3. Remote library by name
   try {
