@@ -206,10 +206,6 @@ window.onmessage = function (event) {
     state.catalogSummary = msg.catalogSummary;
     renderCatalogSummary();
   }
-  else if (msg.type === 'catalog-progress') {
-    state.catalog = Object.assign({ fileName: 'Fetching…', fetchedAt: new Date().toISOString(), components: [], componentSets: [], styles: [] }, state.catalog || {}, msg.partial || {});
-    renderCatalog();
-  }
   else if (msg.type === 'attached') {
     state.attached = msg.attached;
     renderAttached();
