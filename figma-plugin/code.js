@@ -144,12 +144,11 @@ async function bootstrap() {
   var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
   var libraryUrl = await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
   var catalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
-  var attached = await listAttached();
   post('init', {
     hasToken: !!token,
     libraryUrl: libraryUrl || '',
     catalog: catalog || null,
-    attached: attached
+    attached: null
   });
 }
 
