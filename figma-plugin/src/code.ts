@@ -252,49 +252,114 @@ async function resolveComponent(
   entry: PlacementInstruction,
   mode: 'Light' | 'Dark',
 ): Promise<{ node: ComponentNode | null; matchType: MatchType }> {
+  // 1. Local file lookups (same-file components)
+  if (entry.figmaComponentSetId) {
+    try {
+      const setNode = await figma.getNodeByIdAsync(entry.figmaComponentSetId);
+      if (setNode && setNode.type === 'COMPONENT_SET') {
+        const match = pickVariantFromSet(setNode as ComponentSetNode, entry, mode);
+        if (match) return { node: match, matchType: 'set-variant' };
+      }
+    } catch (e) {}
+  }
+
   if (entry.figmaNodeId) {
     try {
       const node = await figma.getNodeByIdAsync(entry.figmaNodeId);
       if (node) {
-        const root = climbToComponentRoot(node);
-        if (root && root.type === 'COMPONENT') {
-          const parent = (root.node as ComponentNode).parent;
-          if (parent && parent.type === 'COMPONENT_SET') {
-            const match = pickVariantFromSet(parent as ComponentSetNode, entry, mode);
+        let cur: BaseNode | null = node;
+        while (cur) {
+          if (cur.type === 'COMPONENT_SET') {
+            const match = pickVariantFromSet(cur as ComponentSetNode, entry, mode);
             if (match) return { node: match, matchType: 'set-variant' };
           }
-          return { node: root.node as ComponentNode, matchType: 'exact-id' };
-        }
-        if (root && root.type === 'COMPONENT_SET') {
-          const match = pickVariantFromSet(root.node as ComponentSetNode, entry, mode);
-          if (match) return { node: match, matchType: 'set-variant' };
+          if (cur.type === 'COMPONENT') {
+            const parent = (cur as ComponentNode).parent;
+            if (parent && parent.type === 'COMPONENT_SET') {
+              const match = pickVariantFromSet(parent as ComponentSetNode, entry, mode);
+              if (match) return { node: match, matchType: 'set-variant' };
+            }
+            return { node: cur as ComponentNode, matchType: 'exact-id' };
+          }
+          cur = (cur as any).parent || null;
         }
       }
-    } catch {}
+    } catch (e) {}
   }
 
-  if (entry.figmaComponentSetId) {
-    try {
-      const set = await figma.getNodeByIdAsync(entry.figmaComponentSetId);
-      if (set && set.type === 'COMPONENT_SET') {
-        const match = pickVariantFromSet(set as ComponentSetNode, entry, mode);
-        if (match) return { node: match, matchType: 'set-variant' };
-      }
-    } catch {}
-  }
-
+  // 2. External library — importComponentByKeyAsync
   try {
     const tl = (figma as any).teamLibrary;
     if (tl && tl.getAvailableComponentsAsync) {
       const available = await tl.getAvailableComponentsAsync();
-      const want = entry.component.toLowerCase();
-      const remote = available.find((c: any) => c.name.toLowerCase().indexOf(want) !== -1);
-      if (remote) {
-        const imported = await figma.importComponentByKeyAsync(remote.key);
-        return { node: imported, matchType: 'name-match' };
+
+      // Strategy A: match by figmaComponentSetId embedded in key
+      if (entry.figmaComponentSetId) {
+        const idFragment = entry.figmaComponentSetId.replace(':', '');
+        for (let i = 0; i < available.length; i++) {
+          const c = available[i];
+          if (c.key && c.key.indexOf(idFragment) !== -1) {
+            try {
+              const imported = await figma.importComponentByKeyAsync(c.key);
+              if (imported) {
+                const parentSet = imported.parent;
+                if (parentSet && parentSet.type === 'COMPONENT_SET') {
+                  const match = pickVariantFromSet(parentSet as ComponentSetNode, entry, mode);
+                  if (match) return { node: match, matchType: 'set-variant' };
+                }
+                return { node: imported, matchType: 'exact-id' };
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      // Strategy B: exact name match (skip internal .Foo names)
+      const exactName = entry.component.toLowerCase();
+      const candidates: any[] = [];
+      for (let i = 0; i < available.length; i++) {
+        const c = available[i];
+        const cName = c.name.toLowerCase();
+        if (cName.charAt(0) === '.') continue;
+        const baseName = cName.split('/')[0].trim();
+        if (baseName === exactName) candidates.push(c);
+      }
+
+      // Strategy C: partial match fallback
+      if (candidates.length === 0) {
+        for (let i = 0; i < available.length; i++) {
+          const c = available[i];
+          if (c.name.charAt(0) === '.') continue;
+          if (c.name.toLowerCase().indexOf(exactName) !== -1) {
+            candidates.push(c);
+          }
+        }
+      }
+
+      for (let j = 0; j < candidates.length; j++) {
+        try {
+          const imported = await figma.importComponentByKeyAsync(candidates[j].key);
+          if (!imported) continue;
+          const parentSet = imported.parent;
+          if (parentSet && parentSet.type === 'COMPONENT_SET') {
+            const match = pickVariantFromSet(parentSet as ComponentSetNode, entry, mode);
+            if (match) return { node: match, matchType: 'set-variant' };
+            if (parentSet.name.toLowerCase() === exactName) {
+              const defaultVariant = (parentSet as ComponentSetNode).defaultVariant || imported;
+              return { node: defaultVariant, matchType: 'name-match' };
+            }
+          }
+          if (imported.name.toLowerCase().indexOf(exactName) !== -1) {
+            return { node: imported, matchType: 'name-match' };
+          }
+        } catch (e) {
+          uiLog('  ! import failed for ' + candidates[j].name + ': ' + ((e as Error).message || e), '#fbbf24');
+        }
       }
     }
-  } catch {}
+  } catch (e) {
+    uiLog('  ! library search error: ' + ((e as Error).message || e), '#fca5a5');
+  }
 
   return { node: null, matchType: 'missing' };
 }
