@@ -217,7 +217,7 @@
   }
 
   function refreshParseEnabled() {
-    $('parseBtn').disabled = !(jsxText && usageText);
+    $('parseBtn').disabled = !usageText;
   }
 
   $('jsxFile').addEventListener('change', async (e) => {
@@ -232,23 +232,44 @@
   $('parseBtn').addEventListener('click', () => {
     $('parseErrors').innerHTML = '';
     if (!usageText) {
-      $('parseErrors').innerHTML = '<div class="err">usage.json required. The JSX data-ds-* attributes will be used as fallback but accuracy is reduced. Drop usage.json to continue.</div>';
+      $('parseErrors').innerHTML = '<div class="err">usage.json required.</div>';
       return;
     }
-    send('parse', { jsxText, usageText });
+    send('parse', { jsxText: jsxText || '', usageText });
   });
 
   $('buildBtn').addEventListener('click', () => {
     if (!parsed) return;
+    const screenshotInput = $('screenshot-input');
+    const screenshotFile = screenshotInput.files && screenshotInput.files[0];
+    if (!screenshotFile) {
+      const d = document.createElement('div');
+      d.className = 'err';
+      d.textContent = 'Screenshot PNG is required.';
+      $('parseErrors').appendChild(d);
+      return;
+    }
     $('log').innerHTML = '';
     $('summary').style.display = 'none';
-    send('build', {
-      targetFrameId: $('targetFrame').value,
-      width: Number($('frameW').value) || 375,
-      height: Number($('frameH').value) || 812,
-      mode,
-    });
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const arrayBuffer = ev.target.result;
+      parent.postMessage({
+        pluginMessage: {
+          type: 'build',
+          payload: {
+            screenshotBytes: new Uint8Array(arrayBuffer),
+            targetFrameId: $('targetFrame').value,
+            width: Number($('frameW').value) || 375,
+            height: Number($('frameH').value) || 812,
+            mode,
+          },
+        },
+      }, '*');
+    };
+    reader.readAsArrayBuffer(screenshotFile);
   });
+
 
   $('zoomBtn').addEventListener('click', () => {
     if (lastFrameId) send('zoom', { frameId: lastFrameId });
