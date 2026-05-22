@@ -162,6 +162,10 @@ function escapeHtml(s) {
   });
 }
 
+function safeId(s) {
+  return String(s == null ? 'other' : s).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
 $('saveBtn').onclick = function () {
   send('save-config', { token: $('token').value.trim(), libraryUrl: $('libraryUrl').value.trim() });
 };
@@ -169,7 +173,9 @@ $('fetchBtn').onclick = function () {
   send('fetch-catalog', { libraryUrl: $('libraryUrl').value.trim() });
 };
 $('clearBtn').onclick = function () { send('clear-config'); };
-$('rescanBtn').onclick = function () { send('rescan-attached'); };
+$('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
+$('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
+$('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
 
 window.onmessage = function (event) {
   var msg = event.data.pluginMessage;
@@ -179,6 +185,7 @@ window.onmessage = function (event) {
     state.hasToken = msg.hasToken;
     state.libraryUrl = msg.libraryUrl || '';
     state.catalog = msg.catalog || null;
+    state.catalogSummary = msg.catalogSummary || null;
     state.attached = msg.attached || null;
     $('libraryUrl').value = state.libraryUrl;
     $('token').placeholder = state.hasToken ? 'Token saved (enter new to replace)' : 'Personal access token (saved locally)';
@@ -192,6 +199,15 @@ window.onmessage = function (event) {
   }
   else if (msg.type === 'catalog') {
     state.catalog = msg.catalog;
+    if (!msg.catalog) state.catalogSummary = null;
+    renderCatalog();
+  }
+  else if (msg.type === 'catalog-summary') {
+    state.catalogSummary = msg.catalogSummary;
+    renderCatalogSummary();
+  }
+  else if (msg.type === 'catalog-progress') {
+    state.catalog = Object.assign({ fileName: 'Fetching…', fetchedAt: new Date().toISOString(), components: [], componentSets: [], styles: [] }, state.catalog || {}, msg.partial || {});
     renderCatalog();
   }
   else if (msg.type === 'attached') {
