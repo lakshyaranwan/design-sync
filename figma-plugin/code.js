@@ -8,6 +8,7 @@ figma.showUI(__html__, { width: 560, height: 760 });
 var STORAGE_TOKEN = 'figma_pat';
 var STORAGE_LIBRARY_URL = 'library_file_url';
 var STORAGE_CATALOG = 'library_catalog';
+var STORAGE_CATALOG_SUMMARY = 'library_catalog_summary';
 
 function post(type, payload) {
   figma.ui.postMessage(Object.assign({ type: type }, payload || {}));
@@ -33,11 +34,12 @@ function extractFileKey(url) {
 }
 
 // ---------- in-file usage scan ----------
-async function scanUsedComponents() {
-  if (typeof figma.loadAllPagesAsync === 'function') {
+async function scanUsedComponents(scope) {
+  var root = scope === 'file' ? figma.root : figma.currentPage;
+  if (scope === 'file' && typeof figma.loadAllPagesAsync === 'function') {
     await figma.loadAllPagesAsync();
   }
-  var instances = figma.root.findAll(function (node) { return node.type === 'INSTANCE'; });
+  var instances = root.findAll(function (node) { return node.type === 'INSTANCE'; });
   var byKey = {};
   for (var i = 0; i < instances.length; i++) {
     var instance = instances[i];
@@ -69,8 +71,8 @@ async function scanUsedComponents() {
   }).sort(function (a, b) { return a.name.localeCompare(b.name); });
 }
 
-async function listAttached() {
-  var result = { variableCollections: [], usedComponents: [], librariesByName: {}, errors: [] };
+async function listAttached(scope) {
+  var result = { variableCollections: [], usedComponents: [], librariesByName: {}, errors: [], scope: scope || 'page' };
   try {
     var collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     result.variableCollections = collections.map(function (c) {
@@ -84,7 +86,7 @@ async function listAttached() {
     result.errors.push('Variable collections: ' + (e && e.message ? e.message : String(e)));
   }
   try {
-    result.usedComponents = await scanUsedComponents();
+    result.usedComponents = await scanUsedComponents(result.scope);
   } catch (e) {
     result.errors.push('Used component scan: ' + (e && e.message ? e.message : String(e)));
   }
