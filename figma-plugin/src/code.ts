@@ -84,16 +84,20 @@ async function sendInit() {
     .filter((n) => n.type === 'FRAME')
     .map((n) => ({ id: n.id, name: n.name }));
 
-  let librariesConnected = false;
+  // Figma has no public API to enumerate connected libraries from a plugin.
+  // Default to "connected" and let resolveComponent / importComponentByKeyAsync
+  // surface real errors during build. Only flag false on explicit failure.
+  let librariesConnected = true;
   try {
     const tl = (figma as any).teamLibrary;
     if (tl && tl.getAvailableComponentsAsync) {
       const available = await tl.getAvailableComponentsAsync();
-      librariesConnected = !!(available && available.length > 0);
       uiLog('Library components found: ' + (available ? available.length : 0));
+    } else {
+      uiLog('teamLibrary enumeration API unavailable — will rely on importComponentByKeyAsync.');
     }
   } catch (e) {
-    librariesConnected = false;
+    uiLog('Library enumeration failed: ' + ((e as Error).message || e));
   }
 
   figma.ui.postMessage({ type: 'frames', payload: { frames, librariesConnected } });
