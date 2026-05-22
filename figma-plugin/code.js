@@ -88,28 +88,31 @@ function uiError(message) {
 // ---------- Init ----------
 function sendInit() {
     return __awaiter(this, void 0, void 0, function () {
-        var frames, librariesConnected, libs, _a;
-        var _b, _c;
-        return __generator(this, function (_d) {
-            switch (_d.label) {
+        var frames, librariesConnected, tl, available, e_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0:
                     frames = figma.currentPage.children
                         .filter(function (n) { return n.type === 'FRAME'; })
                         .map(function (n) { return ({ id: n.id, name: n.name }); });
-                    librariesConnected = true;
-                    _d.label = 1;
+                    librariesConnected = false;
+                    _a.label = 1;
                 case 1:
-                    _d.trys.push([1, 3, , 4]);
-                    return [4 /*yield*/, ((_c = (_b = figma.teamLibrary) === null || _b === void 0 ? void 0 : _b.getAvailableLibrariesAsync) === null || _c === void 0 ? void 0 : _c.call(_b))];
+                    _a.trys.push([1, 4, , 5]);
+                    tl = figma.teamLibrary;
+                    if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 3];
+                    return [4 /*yield*/, tl.getAvailableComponentsAsync()];
                 case 2:
-                    libs = _d.sent();
-                    if (libs && Array.isArray(libs))
-                        librariesConnected = libs.length > 0;
-                    return [3 /*break*/, 4];
-                case 3:
-                    _a = _d.sent();
-                    return [3 /*break*/, 4];
+                    available = _a.sent();
+                    librariesConnected = !!(available && available.length > 0);
+                    uiLog('Library components found: ' + (available ? available.length : 0));
+                    _a.label = 3;
+                case 3: return [3 /*break*/, 5];
                 case 4:
+                    e_1 = _a.sent();
+                    librariesConnected = false;
+                    return [3 /*break*/, 5];
+                case 5:
                     figma.ui.postMessage({ type: 'frames', payload: { frames: frames, librariesConnected: librariesConnected } });
                     return [2 /*return*/];
             }
@@ -182,7 +185,7 @@ function extractCoordinatesFromTsx(tsxText, componentName) {
     return coords;
 }
 function buildInstructions(manifest, hints) {
-    var e_1, _a;
+    var e_2, _a;
     var warnings = [];
     var hintQueueByComponent = {};
     try {
@@ -193,12 +196,12 @@ function buildInstructions(manifest, hints) {
             (hintQueueByComponent[h.component] = hintQueueByComponent[h.component] || []).push(h);
         }
     }
-    catch (e_1_1) { e_1 = { error: e_1_1 }; }
+    catch (e_2_1) { e_2 = { error: e_2_1 }; }
     finally {
         try {
             if (hints_1_1 && !hints_1_1.done && (_a = hints_1.return)) _a.call(hints_1);
         }
-        finally { if (e_1) throw e_1.error; }
+        finally { if (e_2) throw e_2.error; }
     }
     var enriched = manifest.components.map(function (c, i) {
         var queue = hintQueueByComponent[c.component];
@@ -241,7 +244,7 @@ function climbToComponentRoot(node) {
     return null;
 }
 function pickVariantFromSet(set, entry, mode) {
-    var e_2, _a, e_3, _b;
+    var e_3, _a, e_4, _b;
     var variantProps = parseVariantPath(entry.variantPath);
     var sample = set.children[0] && set.children[0].variantProperties;
     if (variantProps.Mode || (sample && sample.Mode)) {
@@ -261,102 +264,185 @@ function pickVariantFromSet(set, entry, mode) {
                 continue;
             var score = 0;
             try {
-                for (var _e = (e_3 = void 0, __values(Object.keys(variantProps))), _f = _e.next(); !_f.done; _f = _e.next()) {
+                for (var _e = (e_4 = void 0, __values(Object.keys(variantProps))), _f = _e.next(); !_f.done; _f = _e.next()) {
                     var k = _f.value;
                     if (vp[k] === variantProps[k])
                         score++;
                 }
             }
-            catch (e_3_1) { e_3 = { error: e_3_1 }; }
+            catch (e_4_1) { e_4 = { error: e_4_1 }; }
             finally {
                 try {
                     if (_f && !_f.done && (_b = _e.return)) _b.call(_e);
                 }
-                finally { if (e_3) throw e_3.error; }
+                finally { if (e_4) throw e_4.error; }
             }
             if (!best || score > best.score)
                 best = { node: c, score: score };
         }
     }
-    catch (e_2_1) { e_2 = { error: e_2_1 }; }
+    catch (e_3_1) { e_3 = { error: e_3_1 }; }
     finally {
         try {
             if (_d && !_d.done && (_a = _c.return)) _a.call(_c);
         }
-        finally { if (e_2) throw e_2.error; }
+        finally { if (e_3) throw e_3.error; }
     }
     return best ? best.node : null;
 }
 function resolveComponent(entry, mode) {
     return __awaiter(this, void 0, void 0, function () {
-        var node, root, parent, match, match, _a, set, match, _b, tl, available, want_1, remote, imported, _c;
-        return __generator(this, function (_d) {
-            switch (_d.label) {
+        var setNode, match, e_5, node, cur, match, parent, match, e_6, tl, available, idFragment, i, c, imported, parentSet, match, e_7, exactName, candidates, i, c, cName, baseName, i, c, j, imported, parentSet, match, defaultVariant, e_8, e_9;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0:
-                    if (!entry.figmaNodeId) return [3 /*break*/, 4];
-                    _d.label = 1;
+                    if (!entry.figmaComponentSetId) return [3 /*break*/, 4];
+                    _a.label = 1;
                 case 1:
-                    _d.trys.push([1, 3, , 4]);
-                    return [4 /*yield*/, figma.getNodeByIdAsync(entry.figmaNodeId)];
-                case 2:
-                    node = _d.sent();
-                    if (node) {
-                        root = climbToComponentRoot(node);
-                        if (root && root.type === 'COMPONENT') {
-                            parent = root.node.parent;
-                            if (parent && parent.type === 'COMPONENT_SET') {
-                                match = pickVariantFromSet(parent, entry, mode);
-                                if (match)
-                                    return [2 /*return*/, { node: match, matchType: 'set-variant' }];
-                            }
-                            return [2 /*return*/, { node: root.node, matchType: 'exact-id' }];
-                        }
-                        if (root && root.type === 'COMPONENT_SET') {
-                            match = pickVariantFromSet(root.node, entry, mode);
-                            if (match)
-                                return [2 /*return*/, { node: match, matchType: 'set-variant' }];
-                        }
-                    }
-                    return [3 /*break*/, 4];
-                case 3:
-                    _a = _d.sent();
-                    return [3 /*break*/, 4];
-                case 4:
-                    if (!entry.figmaComponentSetId) return [3 /*break*/, 8];
-                    _d.label = 5;
-                case 5:
-                    _d.trys.push([5, 7, , 8]);
+                    _a.trys.push([1, 3, , 4]);
                     return [4 /*yield*/, figma.getNodeByIdAsync(entry.figmaComponentSetId)];
-                case 6:
-                    set = _d.sent();
-                    if (set && set.type === 'COMPONENT_SET') {
-                        match = pickVariantFromSet(set, entry, mode);
+                case 2:
+                    setNode = _a.sent();
+                    if (setNode && setNode.type === 'COMPONENT_SET') {
+                        match = pickVariantFromSet(setNode, entry, mode);
                         if (match)
                             return [2 /*return*/, { node: match, matchType: 'set-variant' }];
                     }
+                    return [3 /*break*/, 4];
+                case 3:
+                    e_5 = _a.sent();
+                    return [3 /*break*/, 4];
+                case 4:
+                    if (!entry.figmaNodeId) return [3 /*break*/, 8];
+                    _a.label = 5;
+                case 5:
+                    _a.trys.push([5, 7, , 8]);
+                    return [4 /*yield*/, figma.getNodeByIdAsync(entry.figmaNodeId)];
+                case 6:
+                    node = _a.sent();
+                    if (node) {
+                        cur = node;
+                        while (cur) {
+                            if (cur.type === 'COMPONENT_SET') {
+                                match = pickVariantFromSet(cur, entry, mode);
+                                if (match)
+                                    return [2 /*return*/, { node: match, matchType: 'set-variant' }];
+                            }
+                            if (cur.type === 'COMPONENT') {
+                                parent = cur.parent;
+                                if (parent && parent.type === 'COMPONENT_SET') {
+                                    match = pickVariantFromSet(parent, entry, mode);
+                                    if (match)
+                                        return [2 /*return*/, { node: match, matchType: 'set-variant' }];
+                                }
+                                return [2 /*return*/, { node: cur, matchType: 'exact-id' }];
+                            }
+                            cur = cur.parent || null;
+                        }
+                    }
                     return [3 /*break*/, 8];
                 case 7:
-                    _b = _d.sent();
+                    e_6 = _a.sent();
                     return [3 /*break*/, 8];
                 case 8:
-                    _d.trys.push([8, 12, , 13]);
+                    _a.trys.push([8, 22, , 23]);
                     tl = figma.teamLibrary;
-                    if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 11];
+                    if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 21];
                     return [4 /*yield*/, tl.getAvailableComponentsAsync()];
                 case 9:
-                    available = _d.sent();
-                    want_1 = entry.component.toLowerCase();
-                    remote = available.find(function (c) { return c.name.toLowerCase().indexOf(want_1) !== -1; });
-                    if (!remote) return [3 /*break*/, 11];
-                    return [4 /*yield*/, figma.importComponentByKeyAsync(remote.key)];
+                    available = _a.sent();
+                    if (!entry.figmaComponentSetId) return [3 /*break*/, 15];
+                    idFragment = entry.figmaComponentSetId.replace(':', '');
+                    i = 0;
+                    _a.label = 10;
                 case 10:
-                    imported = _d.sent();
-                    return [2 /*return*/, { node: imported, matchType: 'name-match' }];
-                case 11: return [3 /*break*/, 13];
+                    if (!(i < available.length)) return [3 /*break*/, 15];
+                    c = available[i];
+                    if (!(c.key && c.key.indexOf(idFragment) !== -1)) return [3 /*break*/, 14];
+                    _a.label = 11;
+                case 11:
+                    _a.trys.push([11, 13, , 14]);
+                    return [4 /*yield*/, figma.importComponentByKeyAsync(c.key)];
                 case 12:
-                    _c = _d.sent();
-                    return [3 /*break*/, 13];
-                case 13: return [2 /*return*/, { node: null, matchType: 'missing' }];
+                    imported = _a.sent();
+                    if (imported) {
+                        parentSet = imported.parent;
+                        if (parentSet && parentSet.type === 'COMPONENT_SET') {
+                            match = pickVariantFromSet(parentSet, entry, mode);
+                            if (match)
+                                return [2 /*return*/, { node: match, matchType: 'set-variant' }];
+                        }
+                        return [2 /*return*/, { node: imported, matchType: 'exact-id' }];
+                    }
+                    return [3 /*break*/, 14];
+                case 13:
+                    e_7 = _a.sent();
+                    return [3 /*break*/, 14];
+                case 14:
+                    i++;
+                    return [3 /*break*/, 10];
+                case 15:
+                    exactName = entry.component.toLowerCase();
+                    candidates = [];
+                    for (i = 0; i < available.length; i++) {
+                        c = available[i];
+                        cName = c.name.toLowerCase();
+                        if (cName.charAt(0) === '.')
+                            continue;
+                        baseName = cName.split('/')[0].trim();
+                        if (baseName === exactName)
+                            candidates.push(c);
+                    }
+                    // Strategy C: partial match fallback
+                    if (candidates.length === 0) {
+                        for (i = 0; i < available.length; i++) {
+                            c = available[i];
+                            if (c.name.charAt(0) === '.')
+                                continue;
+                            if (c.name.toLowerCase().indexOf(exactName) !== -1) {
+                                candidates.push(c);
+                            }
+                        }
+                    }
+                    j = 0;
+                    _a.label = 16;
+                case 16:
+                    if (!(j < candidates.length)) return [3 /*break*/, 21];
+                    _a.label = 17;
+                case 17:
+                    _a.trys.push([17, 19, , 20]);
+                    return [4 /*yield*/, figma.importComponentByKeyAsync(candidates[j].key)];
+                case 18:
+                    imported = _a.sent();
+                    if (!imported)
+                        return [3 /*break*/, 20];
+                    parentSet = imported.parent;
+                    if (parentSet && parentSet.type === 'COMPONENT_SET') {
+                        match = pickVariantFromSet(parentSet, entry, mode);
+                        if (match)
+                            return [2 /*return*/, { node: match, matchType: 'set-variant' }];
+                        if (parentSet.name.toLowerCase() === exactName) {
+                            defaultVariant = parentSet.defaultVariant || imported;
+                            return [2 /*return*/, { node: defaultVariant, matchType: 'name-match' }];
+                        }
+                    }
+                    if (imported.name.toLowerCase().indexOf(exactName) !== -1) {
+                        return [2 /*return*/, { node: imported, matchType: 'name-match' }];
+                    }
+                    return [3 /*break*/, 20];
+                case 19:
+                    e_8 = _a.sent();
+                    uiLog('  ! import failed for ' + candidates[j].name + ': ' + (e_8.message || e_8), '#fbbf24');
+                    return [3 /*break*/, 20];
+                case 20:
+                    j++;
+                    return [3 /*break*/, 16];
+                case 21: return [3 /*break*/, 23];
+                case 22:
+                    e_9 = _a.sent();
+                    uiLog('  ! library search error: ' + (e_9.message || e_9), '#fca5a5');
+                    return [3 /*break*/, 23];
+                case 23: return [2 /*return*/, { node: null, matchType: 'missing' }];
             }
         });
     });
@@ -364,7 +450,7 @@ function resolveComponent(entry, mode) {
 // ---------- Helpers ----------
 function setTextContent(instance, label) {
     return __awaiter(this, void 0, void 0, function () {
-        var textNodes, t, e_4;
+        var textNodes, t, e_10;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -381,8 +467,8 @@ function setTextContent(instance, label) {
                     t.characters = label;
                     return [3 /*break*/, 4];
                 case 3:
-                    e_4 = _a.sent();
-                    uiLog("  ! font load failed: ".concat(e_4.message), '#fbbf24');
+                    e_10 = _a.sent();
+                    uiLog("  ! font load failed: ".concat(e_10.message), '#fbbf24');
                     return [3 /*break*/, 4];
                 case 4: return [2 /*return*/];
             }
@@ -392,8 +478,8 @@ function setTextContent(instance, label) {
 // ---------- Build (screenshot + overlay) ----------
 function buildScreen(manifest, instructions, screenshotBytes, options) {
     return __awaiter(this, void 0, void 0, function () {
-        var frame, imageHash, exactMatch, nameMatch, missing, approximate, instructions_1, instructions_1_1, instr, coords, fallback, resolved, instance, parentSet, set, seed, variantProps, sample, ph, e_5_1;
-        var e_5, _a;
+        var frame, imageHash, exactMatch, nameMatch, missing, approximate, instructions_1, instructions_1_1, instr, coords, fallback, resolved, instance, parentSet, set, seed, variantProps, sample, ph, e_11_1;
+        var e_11, _a;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
@@ -517,14 +603,14 @@ function buildScreen(manifest, instructions, screenshotBytes, options) {
                     return [3 /*break*/, 2];
                 case 8: return [3 /*break*/, 11];
                 case 9:
-                    e_5_1 = _b.sent();
-                    e_5 = { error: e_5_1 };
+                    e_11_1 = _b.sent();
+                    e_11 = { error: e_11_1 };
                     return [3 /*break*/, 11];
                 case 10:
                     try {
                         if (instructions_1_1 && !instructions_1_1.done && (_a = instructions_1.return)) _a.call(instructions_1);
                     }
-                    finally { if (e_5) throw e_5.error; }
+                    finally { if (e_11) throw e_11.error; }
                     return [7 /*endfinally*/];
                 case 11: return [2 /*return*/, {
                         screen: manifest.screen,
@@ -544,8 +630,8 @@ function buildScreen(manifest, instructions, screenshotBytes, options) {
 // ---------- Resync / Audit / Reverse ----------
 function resyncSelection() {
     return __awaiter(this, void 0, void 0, function () {
-        var sel, updated, _a, _b, child, variantPath, component, nodeId, fakeInstr, node, e_6_1;
-        var e_6, _c;
+        var sel, updated, _a, _b, child, variantPath, component, nodeId, fakeInstr, node, e_12_1;
+        var e_12, _c;
         return __generator(this, function (_d) {
             switch (_d.label) {
                 case 0:
@@ -595,14 +681,14 @@ function resyncSelection() {
                     return [3 /*break*/, 2];
                 case 5: return [3 /*break*/, 8];
                 case 6:
-                    e_6_1 = _d.sent();
-                    e_6 = { error: e_6_1 };
+                    e_12_1 = _d.sent();
+                    e_12 = { error: e_12_1 };
                     return [3 /*break*/, 8];
                 case 7:
                     try {
                         if (_b && !_b.done && (_c = _a.return)) _c.call(_a);
                     }
-                    finally { if (e_6) throw e_6.error; }
+                    finally { if (e_12) throw e_12.error; }
                     return [7 /*endfinally*/];
                 case 8:
                     uiLog("re-synced ".concat(updated, " instance(s)"), '#86efac');
@@ -670,22 +756,22 @@ function reverseExport() {
 }
 // ---------- Message handler ----------
 figma.ui.onmessage = function (msg) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, type, payload, manifest, warnings, hints, _b, instructions, w2, preview, counts, instructions_2, instructions_2_1, inst, seen, _loop_2, instructions_3, instructions_3_1, inst, e_7_1, bytes, report, n, e_8;
-    var e_9, _c, e_7, _d;
-    return __generator(this, function (_e) {
-        switch (_e.label) {
+    var _a, type, payload, manifest, warnings, hints, _b, instructions, w2, preview, counts, instructions_2, instructions_2_1, inst, seen, instructions_3, instructions_3_1, inst, status, n, _c, tl, available, name, i, baseName, _d, e_13_1, bytes, report, n, e_14;
+    var e_15, _e, e_13, _f;
+    return __generator(this, function (_g) {
+        switch (_g.label) {
             case 0:
                 _a = msg, type = _a.type, payload = _a.payload;
-                _e.label = 1;
+                _g.label = 1;
             case 1:
-                _e.trys.push([1, 19, , 20]);
+                _g.trys.push([1, 27, , 28]);
                 if (!(type === 'init')) return [3 /*break*/, 3];
                 return [4 /*yield*/, sendInit()];
             case 2:
-                _e.sent();
+                _g.sent();
                 return [2 /*return*/];
             case 3:
-                if (!(type === 'parse')) return [3 /*break*/, 12];
+                if (!(type === 'parse')) return [3 /*break*/, 20];
                 manifest = void 0;
                 try {
                     manifest = parseUsage(payload.usageText);
@@ -712,102 +798,95 @@ figma.ui.onmessage = function (msg) { return __awaiter(void 0, void 0, void 0, f
                         counts[inst.variantPath] = (counts[inst.variantPath] || 0) + 1;
                     }
                 }
-                catch (e_9_1) { e_9 = { error: e_9_1 }; }
+                catch (e_15_1) { e_15 = { error: e_15_1 }; }
                 finally {
                     try {
-                        if (instructions_2_1 && !instructions_2_1.done && (_c = instructions_2.return)) _c.call(instructions_2);
+                        if (instructions_2_1 && !instructions_2_1.done && (_e = instructions_2.return)) _e.call(instructions_2);
                     }
-                    finally { if (e_9) throw e_9.error; }
+                    finally { if (e_15) throw e_15.error; }
                 }
                 seen = {};
-                _loop_2 = function (inst) {
-                    var status, n, _f, tl, available, _g;
-                    return __generator(this, function (_h) {
-                        switch (_h.label) {
-                            case 0:
-                                if (seen[inst.variantPath])
-                                    return [2 /*return*/, "continue"];
-                                seen[inst.variantPath] = true;
-                                status = 'missing';
-                                if (!inst.figmaNodeId) return [3 /*break*/, 4];
-                                _h.label = 1;
-                            case 1:
-                                _h.trys.push([1, 3, , 4]);
-                                return [4 /*yield*/, figma.getNodeByIdAsync(inst.figmaNodeId)];
-                            case 2:
-                                n = _h.sent();
-                                if (n && (n.type === 'COMPONENT' || n.type === 'COMPONENT_SET'))
-                                    status = 'exact';
-                                return [3 /*break*/, 4];
-                            case 3:
-                                _f = _h.sent();
-                                return [3 /*break*/, 4];
-                            case 4:
-                                if (!(status === 'missing')) return [3 /*break*/, 9];
-                                _h.label = 5;
-                            case 5:
-                                _h.trys.push([5, 8, , 9]);
-                                tl = figma.teamLibrary;
-                                if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 7];
-                                return [4 /*yield*/, tl.getAvailableComponentsAsync()];
-                            case 6:
-                                available = _h.sent();
-                                if (available.find(function (c) {
-                                    return c.name.toLowerCase().indexOf(inst.component.toLowerCase()) !== -1;
-                                })) {
-                                    status = 'name';
-                                }
-                                _h.label = 7;
-                            case 7: return [3 /*break*/, 9];
-                            case 8:
-                                _g = _h.sent();
-                                return [3 /*break*/, 9];
-                            case 9:
-                                preview.push({
-                                    component: inst.component,
-                                    variantPath: inst.variantPath,
-                                    figmaNodeId: inst.figmaNodeId,
-                                    count: counts[inst.variantPath],
-                                    status: status,
-                                });
-                                return [2 /*return*/];
-                        }
-                    });
-                };
-                _e.label = 4;
+                _g.label = 4;
             case 4:
-                _e.trys.push([4, 9, 10, 11]);
+                _g.trys.push([4, 17, 18, 19]);
                 instructions_3 = __values(instructions), instructions_3_1 = instructions_3.next();
-                _e.label = 5;
+                _g.label = 5;
             case 5:
-                if (!!instructions_3_1.done) return [3 /*break*/, 8];
+                if (!!instructions_3_1.done) return [3 /*break*/, 16];
                 inst = instructions_3_1.value;
-                return [5 /*yield**/, _loop_2(inst)];
+                if (seen[inst.variantPath])
+                    return [3 /*break*/, 15];
+                seen[inst.variantPath] = true;
+                status = 'missing';
+                if (!inst.figmaNodeId) return [3 /*break*/, 9];
+                _g.label = 6;
             case 6:
-                _e.sent();
-                _e.label = 7;
+                _g.trys.push([6, 8, , 9]);
+                return [4 /*yield*/, figma.getNodeByIdAsync(inst.figmaNodeId)];
             case 7:
+                n = _g.sent();
+                if (n && (n.type === 'COMPONENT' || n.type === 'COMPONENT_SET'))
+                    status = 'exact';
+                return [3 /*break*/, 9];
+            case 8:
+                _c = _g.sent();
+                return [3 /*break*/, 9];
+            case 9:
+                if (!(status === 'missing')) return [3 /*break*/, 14];
+                _g.label = 10;
+            case 10:
+                _g.trys.push([10, 13, , 14]);
+                tl = figma.teamLibrary;
+                if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 12];
+                return [4 /*yield*/, tl.getAvailableComponentsAsync()];
+            case 11:
+                available = _g.sent();
+                name = inst.component.toLowerCase();
+                for (i = 0; i < available.length; i++) {
+                    if (available[i].name.charAt(0) === '.')
+                        continue;
+                    baseName = available[i].name.toLowerCase().split('/')[0].trim();
+                    if (baseName === name) {
+                        status = 'name';
+                        break;
+                    }
+                }
+                _g.label = 12;
+            case 12: return [3 /*break*/, 14];
+            case 13:
+                _d = _g.sent();
+                return [3 /*break*/, 14];
+            case 14:
+                preview.push({
+                    component: inst.component,
+                    variantPath: inst.variantPath,
+                    figmaNodeId: inst.figmaNodeId,
+                    count: counts[inst.variantPath],
+                    status: status,
+                });
+                _g.label = 15;
+            case 15:
                 instructions_3_1 = instructions_3.next();
                 return [3 /*break*/, 5];
-            case 8: return [3 /*break*/, 11];
-            case 9:
-                e_7_1 = _e.sent();
-                e_7 = { error: e_7_1 };
-                return [3 /*break*/, 11];
-            case 10:
+            case 16: return [3 /*break*/, 19];
+            case 17:
+                e_13_1 = _g.sent();
+                e_13 = { error: e_13_1 };
+                return [3 /*break*/, 19];
+            case 18:
                 try {
-                    if (instructions_3_1 && !instructions_3_1.done && (_d = instructions_3.return)) _d.call(instructions_3);
+                    if (instructions_3_1 && !instructions_3_1.done && (_f = instructions_3.return)) _f.call(instructions_3);
                 }
-                finally { if (e_7) throw e_7.error; }
+                finally { if (e_13) throw e_13.error; }
                 return [7 /*endfinally*/];
-            case 11:
+            case 19:
                 figma.ui.postMessage({
                     type: 'parsed',
                     payload: { preview: preview, warnings: warnings, customGroups: [], customCount: 0 },
                 });
                 return [2 /*return*/];
-            case 12:
-                if (!(type === 'build')) return [3 /*break*/, 14];
+            case 20:
+                if (!(type === 'build')) return [3 /*break*/, 22];
                 if (!parsedManifest || !parsedInstructions.length) {
                     uiError('Parse files first.');
                     return [2 /*return*/];
@@ -824,28 +903,28 @@ figma.ui.onmessage = function (msg) { return __awaiter(void 0, void 0, void 0, f
                         height: payload.height,
                         mode: payload.mode,
                     })];
-            case 13:
-                report = _e.sent();
+            case 21:
+                report = _g.sent();
                 figma.ui.postMessage({ type: 'built', payload: report });
                 uiLog("done \u00B7 ".concat(report.exactMatch + report.nameMatch, "/").concat(report.total, " placed"), '#86efac');
                 return [2 /*return*/];
-            case 14:
-                if (!(type === 'zoom')) return [3 /*break*/, 16];
+            case 22:
+                if (!(type === 'zoom')) return [3 /*break*/, 24];
                 return [4 /*yield*/, figma.getNodeByIdAsync(payload.frameId)];
-            case 15:
-                n = _e.sent();
+            case 23:
+                n = _g.sent();
                 if (n && 'visible' in n) {
                     figma.currentPage.selection = [n];
                     figma.viewport.scrollAndZoomIntoView([n]);
                 }
                 return [2 /*return*/];
-            case 16:
-                if (!(type === 'resync')) return [3 /*break*/, 18];
+            case 24:
+                if (!(type === 'resync')) return [3 /*break*/, 26];
                 return [4 /*yield*/, resyncSelection()];
-            case 17:
-                _e.sent();
+            case 25:
+                _g.sent();
                 return [2 /*return*/];
-            case 18:
+            case 26:
                 if (type === 'audit') {
                     auditSelection();
                     return [2 /*return*/];
@@ -854,12 +933,12 @@ figma.ui.onmessage = function (msg) { return __awaiter(void 0, void 0, void 0, f
                     reverseExport();
                     return [2 /*return*/];
                 }
-                return [3 /*break*/, 20];
-            case 19:
-                e_8 = _e.sent();
-                uiError(e_8.message);
-                return [3 /*break*/, 20];
-            case 20: return [2 /*return*/];
+                return [3 /*break*/, 28];
+            case 27:
+                e_14 = _g.sent();
+                uiError(e_14.message);
+                return [3 /*break*/, 28];
+            case 28: return [2 /*return*/];
         }
     });
 }); };
