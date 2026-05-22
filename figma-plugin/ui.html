@@ -84,16 +84,53 @@ function renderCatalog() {
 
   Object.keys(stylesByType).sort().forEach(function (t) {
     var arr = stylesByType[t];
-    html += '<details><summary>' + t + ' styles (' + arr.length + ')</summary><div class="scroll" id="styles-' + escapeAttr(t) + '"></div>';
-    html += '</div></details>';
+    html += '<details><summary>' + escapeHtml(t) + ' styles (' + arr.length + ')</summary><div class="scroll" id="styles-' + safeId(t) + '"></div></details>';
   });
 
   el.innerHTML = html;
   renderItemsBatched($('setsList'), c.componentSets, renderSetItem, job);
   renderItemsBatched($('componentsList'), c.components, renderComponentItem, job);
   Object.keys(stylesByType).sort().forEach(function (t) {
-    renderItemsBatched($('styles-' + t), stylesByType[t], renderStyleItem, job);
+    renderItemsBatched($('styles-' + safeId(t)), stylesByType[t], renderStyleItem, job);
   });
+}
+
+function renderCatalogSummary() {
+  var s = state.catalogSummary;
+  $('catalogSummary').textContent = s
+    ? s.fileName + ' · ' + s.componentCount + ' components · ' + s.componentSetCount + ' sets · ' + s.styleCount + ' styles'
+    : '';
+}
+
+function renderItemsBatched(container, items, renderer, job) {
+  if (!container) return;
+  container.textContent = '';
+  var index = 0;
+  function step() {
+    if (job !== renderJob) return;
+    var html = '';
+    var end = Math.min(index + 80, items.length);
+    for (; index < end; index++) html += renderer(items[index]);
+    container.insertAdjacentHTML('beforeend', html);
+    if (index < items.length) setTimeout(step, 0);
+  }
+  step();
+}
+
+function renderSetItem(s) {
+  var html = '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
+  if (s.description) html += ' <span class="muted">— ' + escapeHtml(s.description) + '</span>';
+  return html + '<div class="muted">key: ' + escapeHtml(s.key) + '</div></div>';
+}
+
+function renderComponentItem(comp) {
+  var html = '<div class="item"><strong>' + escapeHtml(comp.name) + '</strong>';
+  if (comp.componentSetId) html += ' <span class="pill">variant</span>';
+  return html + '<div class="muted">key: ' + escapeHtml(comp.key) + '</div></div>';
+}
+
+function renderStyleItem(s) {
+  return '<div class="item"><strong>' + escapeHtml(s.name) + '</strong><div class="muted">key: ' + escapeHtml(s.key) + '</div></div>';
 }
 
 function renderAttached() {
