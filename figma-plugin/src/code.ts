@@ -1,184 +1,229 @@
-// Sen Money DS Mapper - Ground layer: enumerate attached libraries + component usage
-figma.showUI(__html__, { width: 520, height: 680 });
+// Sen Money DS Mapper
+// - Enumerates attached libraries + component usage (Plugin API)
+// - Fetches FULL design system catalog from a Figma library file via REST API
+//   using a personal access token stored in figma.clientStorage.
 
-type LibrarySummary = { variableCollections: number; components: number };
-type LibraryComponent = { key: string; name: string; libraryName: string; description: string };
-type UsedComponent = {
-  key: string;
-  name: string;
-  remote: boolean;
-  instanceCount: number;
-  variants: string[];
-  pages: string[];
-};
-type LibraryScanResult = {
-  variableCollections: Array<{ key: string; name: string; libraryName: string }>;
-  components: LibraryComponent[];
-  usedComponents: UsedComponent[];
-  librariesByName: Record<string, LibrarySummary>;
-  notes: string[];
-  errors: string[];
-};
+figma.showUI(__html__, { width: 560, height: 760 });
 
-function post(type: string, payload?: Record<string, unknown>) {
-  figma.ui.postMessage(Object.assign({ type }, payload || {}));
+var STORAGE_TOKEN = 'figma_pat';
+var STORAGE_LIBRARY_URL = 'library_file_url';
+var STORAGE_CATALOG = 'library_catalog';
+var STORAGE_CATALOG_SUMMARY = 'library_catalog_summary';
+
+function post(type, payload) {
+  figma.ui.postMessage(Object.assign({ type: type }, payload || {}));
 }
 
-function ensureLibrary(result: LibraryScanResult, name: string) {
+// ---------- helpers ----------
+function ensureLibrary(result, name) {
   if (!result.librariesByName[name]) {
     result.librariesByName[name] = { variableCollections: 0, components: 0 };
   }
 }
 
-function getPageName(node: BaseNode): string {
-  let current: BaseNode | null = node;
+function getPageName(node) {
+  var current = node;
   while (current && current.type !== 'PAGE') current = current.parent;
   return current ? current.name : 'Unknown page';
 }
 
-async function getEnumeratedLibraryComponents(result: LibraryScanResult): Promise<any[]> {
-  const teamLibrary = (figma as any).teamLibrary;
-  const componentApi =
-    teamLibrary &&
-    (teamLibrary.getAvailableComponentsAsync || teamLibrary.getAvailableLibraryComponentsAsync);
-
-  if (!componentApi) {
-    result.notes.push(
-      'This Figma runtime does not expose full Team Library component enumeration. The plugin is showing components already used in this file instead.',
-    );
-    return [];
-  }
-
-  return componentApi.call(teamLibrary);
+function extractFileKey(url) {
+  if (!url) return null;
+  var m = String(url).match(/figma\.com\/(?:file|design)\/([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
 }
 
-async function scanUsedComponents(): Promise<UsedComponent[]> {
-  if (typeof figma.loadAllPagesAsync === 'function') {
+// ---------- in-file usage scan ----------
+async function scanUsedComponents(scope) {
+  var root = scope === 'file' ? figma.root : figma.currentPage;
+  if (scope === 'file' && typeof figma.loadAllPagesAsync === 'function') {
     await figma.loadAllPagesAsync();
   }
-
-  const instances = figma.root.findAll((node) => node.type === 'INSTANCE') as InstanceNode[];
-  const byKey: Record<
-    string,
-    {
-      key: string;
-      name: string;
-      remote: boolean;
-      instanceCount: number;
-      variantsByName: Record<string, true>;
-      pagesByName: Record<string, true>;
-    }
-  > = {};
-
-  for (const instance of instances) {
-    let main: ComponentNode | null = null;
+  var instances = root.findAll(function (node) { return node.type === 'INSTANCE'; });
+  var byKey = {};
+  for (var i = 0; i < instances.length; i++) {
+    var instance = instances[i];
+    var main = null;
     try {
-      main = instance.getMainComponentAsync
-        ? await instance.getMainComponentAsync()
-        : instance.mainComponent;
+      main = instance.getMainComponentAsync ? await instance.getMainComponentAsync() : instance.mainComponent;
     } catch (e) {}
     if (!main) continue;
-
-    const parentSet = main.parent && main.parent.type === 'COMPONENT_SET' ? main.parent : null;
-    const key = (parentSet && parentSet.key) || main.key || main.id;
-    const name = parentSet ? parentSet.name : main.name;
-    const variant = parentSet ? main.name : '';
-    const page = getPageName(instance);
-
+    var parentSet = main.parent && main.parent.type === 'COMPONENT_SET' ? main.parent : null;
+    var key = (parentSet && parentSet.key) || main.key || main.id;
+    var name = parentSet ? parentSet.name : main.name;
+    var variant = parentSet ? main.name : '';
+    var page = getPageName(instance);
     if (!byKey[key]) {
-      byKey[key] = {
-        key,
-        name,
-        remote: Boolean(main.remote),
-        instanceCount: 0,
-        variantsByName: {},
-        pagesByName: {},
-      };
+      byKey[key] = { key: key, name: name, remote: !!main.remote, instanceCount: 0, variantsByName: {}, pagesByName: {} };
     }
-
     byKey[key].instanceCount += 1;
     byKey[key].pagesByName[page] = true;
     if (variant) byKey[key].variantsByName[variant] = true;
   }
+  return Object.keys(byKey).map(function (key) {
+    var item = byKey[key];
+    return {
+      key: item.key, name: item.name, remote: item.remote,
+      instanceCount: item.instanceCount,
+      variants: Object.keys(item.variantsByName).sort(),
+      pages: Object.keys(item.pagesByName).sort()
+    };
+  }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+}
 
-  return Object.keys(byKey)
-    .map((key) => {
-      const item = byKey[key];
+async function listAttached(scope) {
+  var result = { variableCollections: [], usedComponents: [], librariesByName: {}, errors: [], scope: scope || 'page' };
+  try {
+    var collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
+    result.variableCollections = collections.map(function (c) {
+      return { key: c.key, name: c.name, libraryName: c.libraryName };
+    });
+    collections.forEach(function (c) {
+      ensureLibrary(result, c.libraryName);
+      result.librariesByName[c.libraryName].variableCollections += 1;
+    });
+  } catch (e) {
+    result.errors.push('Variable collections: ' + (e && e.message ? e.message : String(e)));
+  }
+  try {
+    result.usedComponents = await scanUsedComponents(result.scope);
+  } catch (e) {
+    result.errors.push('Used component scan: ' + (e && e.message ? e.message : String(e)));
+  }
+  return result;
+}
+
+// ---------- REST API: full catalog ----------
+async function figmaApi(path, token) {
+  var res = await fetch('https://api.figma.com' + path, {
+    headers: { 'X-Figma-Token': token }
+  });
+  if (!res.ok) {
+    var text = '';
+    try { text = await res.text(); } catch (e) {}
+    throw new Error('Figma API ' + res.status + ': ' + (text || res.statusText));
+  }
+  return res.json();
+}
+
+async function fetchLibraryCatalog(fileKey, token) {
+  post('status', { message: 'Fetching components...' });
+  var componentsResp = await figmaApi('/v1/files/' + fileKey + '/components', token);
+  var components = (componentsResp.meta && componentsResp.meta.components) || [];
+  post('catalog-progress', { partial: { components: components.map(function (c) {
+    return {
+      key: c.key, name: c.name, description: c.description || '',
+      containingFrame: c.containing_frame || null,
+      componentSetId: c.component_set_id || null
+    };
+  }) } });
+
+  post('status', { message: 'Fetching component sets...' });
+  var setsResp = await figmaApi('/v1/files/' + fileKey + '/component_sets', token);
+  var componentSets = (setsResp.meta && setsResp.meta.component_sets) || [];
+  post('catalog-progress', { partial: { componentSets: componentSets.map(function (s) {
+    return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
+  }) } });
+
+  post('status', { message: 'Fetching styles...' });
+  var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
+  var styles = (stylesResp.meta && stylesResp.meta.styles) || [];
+  post('catalog-progress', { partial: { styles: styles.map(function (s) {
+    return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
+  }) } });
+
+  post('status', { message: 'Fetching file metadata...' });
+  var fileMeta = await figmaApi('/v1/files/' + fileKey + '?depth=1', token);
+
+  return {
+    fileKey: fileKey,
+    fileName: fileMeta.name || 'Unknown file',
+    lastModified: fileMeta.lastModified || null,
+    fetchedAt: new Date().toISOString(),
+    components: components.map(function (c) {
       return {
-        key: item.key,
-        name: item.name,
-        remote: item.remote,
-        instanceCount: item.instanceCount,
-        variants: Object.keys(item.variantsByName).sort(),
-        pages: Object.keys(item.pagesByName).sort(),
+        key: c.key, name: c.name, description: c.description || '',
+        containingFrame: c.containing_frame || null,
+        componentSetId: c.component_set_id || null
       };
+    }),
+    componentSets: componentSets.map(function (s) {
+      return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
+    }),
+    styles: styles.map(function (s) {
+      return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
     })
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function listLibraries() {
-  post('status', { message: 'Reading libraries and component usage...' });
-
-  const result: LibraryScanResult = {
-    variableCollections: [],
-    components: [],
-    usedComponents: [],
-    librariesByName: {},
-    notes: [],
-    errors: [],
   };
-
-  try {
-    const collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
-    result.variableCollections = collections.map((collection) => ({
-      key: collection.key,
-      name: collection.name,
-      libraryName: collection.libraryName,
-    }));
-    collections.forEach((collection) => {
-      ensureLibrary(result, collection.libraryName);
-      result.librariesByName[collection.libraryName].variableCollections += 1;
-    });
-  } catch (e) {
-    result.errors.push('Variable collections: ' + ((e as Error).message || e));
-  }
-
-  try {
-    const components = await getEnumeratedLibraryComponents(result);
-    result.components = components.map((component) => ({
-      key: component.key,
-      name: component.name,
-      libraryName: component.libraryName || 'Unknown library',
-      description: component.description || '',
-    }));
-    result.components.forEach((component) => {
-      ensureLibrary(result, component.libraryName);
-      result.librariesByName[component.libraryName].components += 1;
-    });
-  } catch (e) {
-    result.errors.push('Components: ' + ((e as Error).message || e));
-  }
-
-  try {
-    result.usedComponents = await scanUsedComponents();
-  } catch (e) {
-    result.errors.push('Used component scan: ' + ((e as Error).message || e));
-  }
-
-  post('libraries', { data: result });
-  post('status', { message: 'Done.' });
 }
 
-figma.ui.onmessage = (msg) => {
-  if (msg.type === 'scan') {
-    listLibraries().catch((e) => {
-      post('status', { message: 'Error: ' + ((e as Error).message || e) });
-    });
-  } else if (msg.type === 'close') {
-    figma.closePlugin();
+// ---------- bootstrap ----------
+async function bootstrap() {
+  var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
+  var libraryUrl = await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
+  var catalogSummary = await figma.clientStorage.getAsync(STORAGE_CATALOG_SUMMARY);
+  post('init', {
+    hasToken: !!token,
+    libraryUrl: libraryUrl || '',
+    catalogSummary: catalogSummary || null,
+    catalog: null,
+    attached: null
+  });
+}
+
+figma.ui.onmessage = async function (msg) {
+  try {
+    if (msg.type === 'save-config') {
+      if (msg.token) await figma.clientStorage.setAsync(STORAGE_TOKEN, msg.token);
+      if (msg.libraryUrl) await figma.clientStorage.setAsync(STORAGE_LIBRARY_URL, msg.libraryUrl);
+      post('status', { message: 'Saved.' });
+      post('config-saved', { hasToken: true, libraryUrl: msg.libraryUrl || '' });
+    } else if (msg.type === 'clear-config') {
+      await figma.clientStorage.deleteAsync(STORAGE_TOKEN);
+      await figma.clientStorage.deleteAsync(STORAGE_LIBRARY_URL);
+      await figma.clientStorage.deleteAsync(STORAGE_CATALOG);
+      await figma.clientStorage.deleteAsync(STORAGE_CATALOG_SUMMARY);
+      post('status', { message: 'Cleared.' });
+      post('config-saved', { hasToken: false, libraryUrl: '' });
+      post('catalog', { catalog: null });
+      post('catalog-summary', { catalogSummary: null });
+    } else if (msg.type === 'fetch-catalog') {
+      var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
+      var libraryUrl = msg.libraryUrl || await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
+      if (!token) { post('status', { message: 'Missing personal access token.' }); return; }
+      var fileKey = extractFileKey(libraryUrl);
+      if (!fileKey) { post('status', { message: 'Invalid Figma file URL.' }); return; }
+      if (libraryUrl) await figma.clientStorage.setAsync(STORAGE_LIBRARY_URL, libraryUrl);
+      var catalog = await fetchLibraryCatalog(fileKey, token);
+      await figma.clientStorage.setAsync(STORAGE_CATALOG, catalog);
+      var summary = {
+        fileKey: catalog.fileKey,
+        fileName: catalog.fileName,
+        lastModified: catalog.lastModified,
+        fetchedAt: catalog.fetchedAt,
+        componentCount: catalog.components.length,
+        componentSetCount: catalog.componentSets.length,
+        styleCount: catalog.styles.length
+      };
+      await figma.clientStorage.setAsync(STORAGE_CATALOG_SUMMARY, summary);
+      post('catalog-summary', { catalogSummary: summary });
+      post('catalog', { catalog: catalog });
+      post('status', { message: 'Fetched ' + catalog.components.length + ' components, ' + catalog.componentSets.length + ' sets, ' + catalog.styles.length + ' styles.' });
+    } else if (msg.type === 'load-cached-catalog') {
+      var cachedCatalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+      post('catalog', { catalog: cachedCatalog || null });
+      post('status', { message: cachedCatalog ? 'Loaded cached catalog.' : 'No cached catalog found.' });
+    } else if (msg.type === 'rescan-attached') {
+      var attached = await listAttached(msg.scope === 'file' ? 'file' : 'page');
+      post('attached', { attached: attached });
+      post('status', { message: 'Rescanned.' });
+    } else if (msg.type === 'close') {
+      figma.closePlugin();
+    }
+  } catch (e) {
+    post('status', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
   }
 };
 
-listLibraries().catch((e) => {
-  post('status', { message: 'Error: ' + ((e as Error).message || e) });
+bootstrap().catch(function (e) {
+  post('status', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
 });
