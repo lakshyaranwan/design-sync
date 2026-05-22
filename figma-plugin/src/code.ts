@@ -874,7 +874,6 @@ function mapAlign(val?: string): FrameNode['counterAxisAlignItems'] {
     'flex-start': 'MIN', 'start': 'MIN',
     'center': 'CENTER',
     'flex-end': 'MAX', 'end': 'MAX',
-    'stretch': 'STRETCH',
   };
   return map[val ?? 'flex-start'] ?? 'MIN';
 }
