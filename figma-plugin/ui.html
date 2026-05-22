@@ -305,6 +305,13 @@ window.onmessage = function (event) {
     state.attached = msg.attached;
     renderAttached();
   }
+  else if (msg.type === 'parsed-instructions') {
+    state.parsed = msg;
+    renderParsed();
+  }
+  else if (msg.type === 'build-complete') {
+    /* status already updated */
+  }
 };
 </script>
 </body>
