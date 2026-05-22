@@ -1150,12 +1150,27 @@ figma.ui.onmessage = async (msg) => {
         );
       }
 
-      const { hints } = payload.jsxText ? parseJsxHints(payload.jsxText) : { hints: [] };
+      const parsedTsx = payload.jsxText
+        ? parseFullTsx(payload.jsxText)
+        : { hints: [], customInstructions: [] as CustomRenderInstruction[] };
+      const { hints, customInstructions } = parsedTsx;
       const { instructions, warnings: w2 } = buildInstructions(manifest, hints);
       warnings.push(...w2);
 
       parsedManifest = manifest;
       parsedInstructions = instructions;
+      parsedCustomInstructions = customInstructions;
+
+      // Custom element grouping for UI preview
+      const customCounts: Record<string, number> = {};
+      for (const ci of customInstructions) {
+        const k = ci.inferredType ?? ci.category;
+        customCounts[k] = (customCounts[k] || 0) + 1;
+      }
+      const customGroups = Object.keys(customCounts).map((k) => ({
+        type: k,
+        count: customCounts[k],
+      }));
 
       // Build preview rows with quick (non-importing) match check
       const preview: any[] = [];
