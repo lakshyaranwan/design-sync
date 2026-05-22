@@ -208,10 +208,12 @@ async function importFromCatalog(match) {
   try {
     if (match.kind === 'set') {
       var set = await figma.importComponentSetByKeyAsync(match.key);
-      return { node: set.defaultVariant || set, isSet: true, set: set };
+      return { node: set.defaultVariant || set, isSet: true, set: set, exactVariant: false };
     }
     var comp = await figma.importComponentByKeyAsync(match.key);
-    return { node: comp, isSet: false };
+    // When matched via figmaNodeId the key is the EXACT variant — skip setProperties guessing.
+    var exact = match.matchType === 'component-nodeId' || match.matchType === 'instr-key';
+    return { node: comp, isSet: false, exactVariant: exact };
   } catch (e) {
     return null;
   }
@@ -243,8 +245,10 @@ function getPlacementCoords(placement) {
   if (!placement) return null;
   if (typeof placement.x === 'number' || typeof placement.width === 'number') {
     return {
-      x: placement.x || 0, y: placement.y || 0,
-      width: placement.width || 0, height: placement.height || 0
+      x: typeof placement.x === 'number' ? placement.x : null,
+      y: typeof placement.y === 'number' ? placement.y : null,
+      width: typeof placement.width === 'number' ? placement.width : null,
+      height: typeof placement.height === 'number' ? placement.height : null
     };
   }
   return null;
@@ -259,13 +263,18 @@ async function parseInstructions(usageJson, tsxText) {
     var occ = occurrenceByName[name] || 0;
     occurrenceByName[name] = occ + 1;
 
-    var coords = getPlacementCoords(instr.placement)
-      || extractCoordinatesFromTsx(tsxText, name, occ);
+    var coords = getPlacementCoords(instr.placement);
+    if (!coords) {
+      var tsxCoords = extractCoordinatesFromTsx(tsxText, name, occ);
+      if (tsxCoords.found) coords = tsxCoords;
+    }
     var match = findInCatalog(catalog, instr);
 
-    // Derive a reasonable label from props if not provided
     var props = instr.props || {};
     var label = props.label || props.title || props.text || '';
+    var section = (instr.placement && instr.placement.section) || '';
+    var anchor = (instr.placement && instr.placement.anchor) || (/footer/i.test(section) ? 'bottom' : 'top');
+    var orderInSection = (instr.placement && instr.placement.orderInSection) || (occ + 1);
 
     return {
       component: name,
@@ -273,12 +282,14 @@ async function parseInstructions(usageJson, tsxText) {
       figmaNodeId: instr.figmaNodeId || null,
       figmaComponentSetId: instr.figmaComponentSetId || null,
       placement: {
-        x: (coords && coords.x) || 0,
-        y: (coords && coords.y) || 0,
-        width: (coords && coords.width) || 320,
-        height: (coords && coords.height) || 48
+        x: coords && coords.x != null ? coords.x : null,
+        y: coords && coords.y != null ? coords.y : null,
+        width: coords && coords.width != null ? coords.width : null,
+        height: coords && coords.height != null ? coords.height : null,
+        section: section,
+        anchor: anchor,
+        orderInSection: orderInSection
       },
-      placementMeta: (instr.placement && !getPlacementCoords(instr.placement)) ? instr.placement : null,
       props: Object.assign({}, props, label ? { label: label } : {}),
       libraryComponentKey: instr.libraryComponentKey || null,
       matchType: match.matchType,
@@ -308,6 +319,43 @@ async function setTextContent(node, text) {
   } catch (e) {}
 }
 
+function layoutFallback(instructions, frameW, frameH) {
+  // Group missing-coord items by section, stack them top-down (or bottom-up for sticky footer).
+  var pad = 20;
+  var gap = 12;
+  var groups = {};
+  instructions.forEach(function (it, idx) {
+    if (it.placement.x != null && it.placement.y != null) return;
+    var sec = it.placement.section || 'Body';
+    (groups[sec] = groups[sec] || []).push({ it: it, idx: idx });
+  });
+  Object.keys(groups).forEach(function (sec) {
+    var list = groups[sec].sort(function (a, b) {
+      return (a.it.placement.orderInSection || 0) - (b.it.placement.orderInSection || 0);
+    });
+    var anchor = list[0].it.placement.anchor || (/footer/i.test(sec) ? 'bottom' : 'top');
+    var sectionTop;
+    if (anchor === 'bottom') {
+      var totalH = list.reduce(function (s, e) { return s + ((e.it.placement.height || 52) + gap); }, -gap);
+      sectionTop = frameH - pad - totalH;
+    } else if (sec === 'Header') {
+      sectionTop = pad;
+    } else {
+      sectionTop = Math.round(frameH * 0.25);
+    }
+    var cursor = sectionTop;
+    list.forEach(function (e) {
+      var w = e.it.placement.width || (frameW - pad * 2);
+      var h = e.it.placement.height || 52;
+      e.it.placement.x = e.it.placement.x != null ? e.it.placement.x : pad;
+      e.it.placement.y = e.it.placement.y != null ? e.it.placement.y : cursor;
+      e.it.placement.width = w;
+      e.it.placement.height = h;
+      cursor += h + gap;
+    });
+  });
+}
+
 async function buildScreen(payload) {
   var instructions = payload.instructions || [];
   var screenshotBytes = payload.screenshotBytes;
@@ -315,6 +363,8 @@ async function buildScreen(payload) {
   var height = payload.height || 812;
   var mode = payload.mode || '';
   var screenName = payload.screenName || 'DS Mapped Screen';
+
+  layoutFallback(instructions, width, height);
 
   var frame = figma.createFrame();
   frame.name = screenName;
@@ -334,21 +384,39 @@ async function buildScreen(payload) {
 
   for (var i = 0; i < instructions.length; i++) {
     var instr = instructions[i];
-    var coords = instr.placement || { x: 0, y: 0, width: 320, height: 48 };
+    var coords = instr.placement;
     var match = { matchType: instr.matchType, key: instr.matchKey, kind: instr.matchKind };
     var imported = match.key ? await importFromCatalog(match) : null;
 
     if (imported && imported.node) {
       var instance = imported.node.createInstance();
-      var variantProps = parseVariantPath(instr.variantPath);
-      if (mode) variantProps.Mode = mode;
-      try { instance.setProperties(variantProps); } catch (e) {}
+
+      // Only apply setProperties when we did NOT import the exact variant directly.
+      if (!imported.exactVariant) {
+        var variantProps = parseVariantPath(instr.variantPath);
+        // Only set Mode if the component actually exposes it (avoid throwing for missing prop)
+        try {
+          var defs = instance.componentProperties || {};
+          if (mode && defs.Mode) variantProps.Mode = mode;
+          if (Object.keys(variantProps).length) instance.setProperties(variantProps);
+        } catch (e) {}
+      }
+
       if (instr.props && instr.props.label) {
         await setTextContent(instance, instr.props.label);
       }
       instance.x = coords.x;
       instance.y = coords.y;
-      try { instance.resize(coords.width, coords.height); } catch (e) {}
+      // Only resize if explicit width/height were provided AND differ from native.
+      // Forced resize on icon-only buttons distorts them — keep native size otherwise.
+      if (coords.width && coords.height) {
+        var nativeW = instance.width, nativeH = instance.height;
+        var ratioW = coords.width / nativeW, ratioH = coords.height / nativeH;
+        // Avoid silly stretches: only resize when within 25% of native, else keep native.
+        if (ratioW > 0.75 && ratioW < 1.5 && ratioH > 0.75 && ratioH < 1.5) {
+          try { instance.resize(coords.width, coords.height); } catch (e) {}
+        }
+      }
       instance.setPluginData('ds-component', instr.component);
       instance.setPluginData('ds-variant', instr.variantPath || '');
       instance.setPluginData('ds-match-type', instr.matchType || '');
@@ -357,9 +425,9 @@ async function buildScreen(payload) {
     } else {
       var ph = figma.createFrame();
       ph.name = '[MISSING] ' + instr.component;
-      ph.resize(Math.max(1, coords.width), Math.max(1, coords.height));
-      ph.x = coords.x;
-      ph.y = coords.y;
+      ph.resize(Math.max(1, coords.width || 100), Math.max(1, coords.height || 40));
+      ph.x = coords.x || 0;
+      ph.y = coords.y || 0;
       ph.fills = [{ type: 'SOLID', color: { r: 1, g: 0.85, b: 0.85 }, opacity: 0.6 }];
       ph.strokes = [{ type: 'SOLID', color: { r: 0.85, g: 0.1, b: 0.1 } }];
       ph.strokeWeight = 1;
@@ -442,6 +510,27 @@ figma.ui.onmessage = async function (msg) {
       var result = await buildScreen(msg);
       post('build-complete', result);
       post('status', { message: 'Placed ' + result.placed + ', missing ' + result.missing + '.' });
+    } else if (msg.type === 'capture-from-url') {
+      var url = (msg.url || 'http://localhost:8765/capture/latest').replace(/\/$/, '');
+      post('status', { message: 'Fetching capture from ' + url + ' …' });
+      var res = await fetch(url);
+      if (!res.ok) { post('status', { message: 'Capture fetch failed: ' + res.status }); return; }
+      var data = await res.json();
+      // Expected: { screenshotBase64, usageJson, tsx, width, height }
+      var bytes = null;
+      if (data.screenshotBase64) {
+        var bin = atob(data.screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, ''));
+        bytes = new Uint8Array(bin.length);
+        for (var bi = 0; bi < bin.length; bi++) bytes[bi] = bin.charCodeAt(bi);
+      }
+      var parsed = await parseInstructions(data.usageJson, data.tsx || '');
+      post('captured', {
+        parsed: parsed,
+        screenshotBytes: bytes,
+        width: data.width || (parsed.width || 0),
+        height: data.height || (parsed.height || 0)
+      });
+      post('status', { message: 'Captured ' + parsed.instructions.length + ' instructions.' });
     } else if (msg.type === 'close') {
       figma.closePlugin();
     }

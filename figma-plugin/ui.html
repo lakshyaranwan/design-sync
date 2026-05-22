@@ -51,7 +51,11 @@
 <div id="attached"></div>
 
 <h2>Recreate Screen from Files</h2>
-<div class="muted">Import TSX, usage.json, and screenshot. Components are resolved against the fetched library catalog above.</div>
+<div class="muted">Import TSX, usage.json, and screenshot manually — or pull all three from your running preview via the capture endpoint.</div>
+<div class="row">
+  <input type="text" id="captureUrl" placeholder="http://localhost:8765/capture/latest" value="http://localhost:8765/capture/latest" />
+  <button id="captureBtn">Capture from preview</button>
+</div>
 <div class="row"><label style="flex:1">usage.json <input type="file" id="usageInput" accept="application/json,.json" /></label></div>
 <div class="row"><label style="flex:1">TSX file <input type="file" id="tsxInput" accept=".tsx,.jsx,text/plain" /></label></div>
 <div class="row"><label style="flex:1">Screenshot (PNG/JPG) <input type="file" id="shotInput" accept="image/png,image/jpeg" /></label></div>
@@ -214,6 +218,9 @@ $('clearBtn').onclick = function () { send('clear-config'); };
 $('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
 $('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
 $('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
+$('captureBtn').onclick = function () {
+  send('capture-from-url', { url: $('captureUrl').value.trim() });
+};
 
 function renderParsed() {
   var el = $('parsed');
@@ -311,6 +318,12 @@ window.onmessage = function (event) {
   }
   else if (msg.type === 'build-complete') {
     /* status already updated */
+  }
+  else if (msg.type === 'captured') {
+    state.parsed = msg.parsed;
+    state.screenshotBytes = msg.screenshotBytes || null;
+    state.screenshotDims = (msg.width && msg.height) ? { width: msg.width, height: msg.height } : null;
+    renderParsed();
   }
 };
 </script>
