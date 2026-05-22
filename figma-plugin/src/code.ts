@@ -84,11 +84,17 @@ async function sendInit() {
     .filter((n) => n.type === 'FRAME')
     .map((n) => ({ id: n.id, name: n.name }));
 
-  let librariesConnected = true;
+  let librariesConnected = false;
   try {
-    const libs = await (figma as any).teamLibrary?.getAvailableLibrariesAsync?.();
-    if (libs && Array.isArray(libs)) librariesConnected = libs.length > 0;
-  } catch {}
+    const tl = (figma as any).teamLibrary;
+    if (tl && tl.getAvailableComponentsAsync) {
+      const available = await tl.getAvailableComponentsAsync();
+      librariesConnected = !!(available && available.length > 0);
+      uiLog('Library components found: ' + (available ? available.length : 0));
+    }
+  } catch (e) {
+    librariesConnected = false;
+  }
 
   figma.ui.postMessage({ type: 'frames', payload: { frames, librariesConnected } });
 }
