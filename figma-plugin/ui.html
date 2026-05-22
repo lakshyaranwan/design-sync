@@ -14,7 +14,9 @@
   ul { margin: 4px 0 8px 16px; padding: 0; max-height: 160px; overflow: auto; }
   li { margin: 2px 0; font-size: 11px; }
   .err { color: #b00; background: #fee; padding: 6px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
+  .note { color: #5c3d00; background: #fff7d6; padding: 6px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
   .empty { color: #999; font-style: italic; }
+  .meta { color: #666; font-size: 10px; margin-left: 4px; }
 </style>
 </head>
 <body>
@@ -38,6 +40,12 @@ function render(data) {
   const out = $('output');
   const errs = $('errors');
   errs.innerHTML = '';
+  (data.notes || []).forEach(function (e) {
+    const d = document.createElement('div');
+    d.className = 'note';
+    d.textContent = e;
+    errs.appendChild(d);
+  });
   (data.errors || []).forEach(function (e) {
     const d = document.createElement('div');
     d.className = 'err';
@@ -46,12 +54,12 @@ function render(data) {
   });
 
   const libNames = Object.keys(data.librariesByName || {}).sort();
+  let html = '';
   if (libNames.length === 0) {
-    out.innerHTML = '<div class="empty">No libraries detected. Make sure libraries are enabled in Assets &rarr; Libraries.</div>';
-    return;
+    html += '<div class="empty">No library token collections detected. Make sure libraries are enabled in Assets &rarr; Libraries.</div>';
+  } else {
+    html += '<h2>Attached Libraries (' + libNames.length + ')</h2>';
   }
-
-  let html = '<h2>Attached Libraries (' + libNames.length + ')</h2>';
   libNames.forEach(function (lib) {
     const stats = data.librariesByName[lib];
     const vcs = (data.variableCollections || []).filter(function (v) { return v.libraryName === lib; });
@@ -73,6 +81,24 @@ function render(data) {
     }
     html += '</div>';
   });
+
+  const used = data.usedComponents || [];
+  html += '<h2>Components Used In This File (' + used.length + ')</h2>';
+  if (!used.length) {
+    html += '<div class="empty">No component instances found on the canvas.</div>';
+  } else {
+    html += '<ul>';
+    used.forEach(function (c) {
+      html += '<li><strong>' + esc(c.name) + '</strong>';
+      html += '<span class="meta">' + c.instanceCount + ' instance' + (c.instanceCount === 1 ? '' : 's');
+      html += c.remote ? ' · remote library' : ' · local';
+      if (c.pages && c.pages.length) html += ' · ' + esc(c.pages.join(', '));
+      html += '</span>';
+      if (c.variants && c.variants.length) html += '<br><span class="meta">Variants: ' + esc(c.variants.slice(0, 8).join(', ')) + (c.variants.length > 8 ? '…' : '') + '</span>';
+      html += '</li>';
+    });
+    html += '</ul>';
+  }
   out.innerHTML = html;
 }
 
