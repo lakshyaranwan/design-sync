@@ -37,7 +37,12 @@ async function listLibraries() {
 
   // 2. Components from enabled libraries
   try {
-    const components = await figma.teamLibrary.getAvailableLibraryComponentsAsync();
+    const componentApi = figma.teamLibrary.getAvailableComponentsAsync || figma.teamLibrary.getAvailableLibraryComponentsAsync;
+    if (!componentApi) {
+      throw new Error('No Team Library component enumeration API is available in this Figma runtime.');
+    }
+
+    const components = await componentApi.call(figma.teamLibrary);
     result.components = components.map(function (c) {
       return {
         key: c.key,
