@@ -128,12 +128,11 @@ async function fetchLibraryCatalog(fileKey, token) {
     components: components.map(function (c) {
       return {
         key: c.key, name: c.name, description: c.description || '',
-        containingFrame: c.containing_frame || null,
         componentSetId: c.component_set_id || null
       };
     }),
     componentSets: componentSets.map(function (s) {
-      return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
+      return { key: s.key, name: s.name, description: s.description || '' };
     }),
     styles: styles.map(function (s) {
       return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
