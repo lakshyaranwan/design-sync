@@ -128,11 +128,12 @@ async function fetchLibraryCatalog(fileKey, token) {
     components: components.map(function (c) {
       return {
         key: c.key, name: c.name, description: c.description || '',
+        nodeId: c.node_id || null,
         componentSetId: c.component_set_id || null
       };
     }),
     componentSets: componentSets.map(function (s) {
-      return { key: s.key, name: s.name, description: s.description || '' };
+      return { key: s.key, name: s.name, description: s.description || '', nodeId: s.node_id || null };
     }),
     styles: styles.map(function (s) {
       return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
@@ -161,9 +162,27 @@ function parseVariantPath(variantPath) {
 function findInCatalog(catalog, instr) {
   if (!catalog) return { matchType: 'no-catalog' };
   var wantedName = normalizeName(instr.component);
+
   if (instr.libraryComponentKey) {
     return { matchType: 'instr-key', key: instr.libraryComponentKey, kind: 'component' };
   }
+  // Match component set by node id
+  if (instr.figmaComponentSetId) {
+    for (var a = 0; a < catalog.componentSets.length; a++) {
+      if (catalog.componentSets[a].nodeId === instr.figmaComponentSetId) {
+        return { matchType: 'set-nodeId', key: catalog.componentSets[a].key, kind: 'set' };
+      }
+    }
+  }
+  // Match exact variant by node id
+  if (instr.figmaNodeId) {
+    for (var b = 0; b < catalog.components.length; b++) {
+      if (catalog.components[b].nodeId === instr.figmaNodeId) {
+        return { matchType: 'component-nodeId', key: catalog.components[b].key, kind: 'component' };
+      }
+    }
+  }
+  // Fallback: name match
   for (var i = 0; i < catalog.componentSets.length; i++) {
     if (normalizeName(catalog.componentSets[i].name) === wantedName) {
       return { matchType: 'set-name', key: catalog.componentSets[i].key, kind: 'set' };
@@ -198,13 +217,15 @@ async function importFromCatalog(match) {
   }
 }
 
-function extractCoordinatesFromTsx(tsxText, componentName) {
+function extractCoordinatesFromTsx(tsxText, componentName, occurrence) {
   var coords = { x: 0, y: 0, width: 0, height: 0, found: false };
   if (!tsxText) return coords;
   var lines = tsxText.split('\n');
+  var seen = 0;
   for (var i = 0; i < lines.length; i++) {
     if (lines[i].indexOf('data-ds-component="' + componentName + '"') === -1) continue;
-    var block = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 6)).join(' ');
+    if (seen < (occurrence || 0)) { seen++; continue; }
+    var block = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 10)).join(' ');
     var left = block.match(/left[:\s]+(\d+)/);
     var top = block.match(/top[:\s]+(\d+)/);
     var w = block.match(/width[:\s]+(\d+)/);
@@ -218,35 +239,59 @@ function extractCoordinatesFromTsx(tsxText, componentName) {
   return coords;
 }
 
+function getPlacementCoords(placement) {
+  if (!placement) return null;
+  if (typeof placement.x === 'number' || typeof placement.width === 'number') {
+    return {
+      x: placement.x || 0, y: placement.y || 0,
+      width: placement.width || 0, height: placement.height || 0
+    };
+  }
+  return null;
+}
+
 async function parseInstructions(usageJson, tsxText) {
   var catalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
-  var instructions = (usageJson && usageJson.instructions) || [];
+  var instructions = (usageJson && (usageJson.components || usageJson.instructions)) || [];
+  var occurrenceByName = {};
   var preview = instructions.map(function (instr) {
-    var coords = (instr.placement && (instr.placement.width || instr.placement.height))
-      ? instr.placement
-      : extractCoordinatesFromTsx(tsxText, instr.component);
+    var name = instr.component;
+    var occ = occurrenceByName[name] || 0;
+    occurrenceByName[name] = occ + 1;
+
+    var coords = getPlacementCoords(instr.placement)
+      || extractCoordinatesFromTsx(tsxText, name, occ);
     var match = findInCatalog(catalog, instr);
+
+    // Derive a reasonable label from props if not provided
+    var props = instr.props || {};
+    var label = props.label || props.title || props.text || '';
+
     return {
-      component: instr.component,
+      component: name,
       variantPath: instr.variantPath || '',
+      figmaNodeId: instr.figmaNodeId || null,
+      figmaComponentSetId: instr.figmaComponentSetId || null,
       placement: {
         x: (coords && coords.x) || 0,
         y: (coords && coords.y) || 0,
         width: (coords && coords.width) || 320,
         height: (coords && coords.height) || 48
       },
-      props: instr.props || {},
+      placementMeta: (instr.placement && !getPlacementCoords(instr.placement)) ? instr.placement : null,
+      props: Object.assign({}, props, label ? { label: label } : {}),
       libraryComponentKey: instr.libraryComponentKey || null,
       matchType: match.matchType,
       matchKey: match.key || null,
       matchKind: match.kind || null
     };
   });
+  var vp = (usageJson && usageJson.viewport) || {};
   return {
     hasCatalog: !!catalog,
     screen: (usageJson && usageJson.screen) || 'DS Mapped Screen',
-    width: (usageJson && usageJson.width) || 0,
-    height: (usageJson && usageJson.height) || 0,
+    width: vp.width || (usageJson && usageJson.width) || 0,
+    height: vp.height || (usageJson && usageJson.height) || 0,
     mode: (usageJson && usageJson.mode) || '',
     instructions: preview
   };
