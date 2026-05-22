@@ -63,11 +63,37 @@
 <div id="parsed"><div class="muted">No files parsed yet.</div></div>
 
 <script>
-var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null };
+var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null, parsed: null, screenshotBytes: null, screenshotDims: null };
 var renderJob = 0;
 
 function $(id) { return document.getElementById(id); }
 function send(type, extra) { parent.postMessage({ pluginMessage: Object.assign({ type: type }, extra || {}) }, '*'); }
+
+function readFileAsText(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(r.result); };
+    r.onerror = function () { reject(r.error); };
+    r.readAsText(file);
+  });
+}
+function readFileAsBytes(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(new Uint8Array(r.result)); };
+    r.onerror = function () { reject(r.error); };
+    r.readAsArrayBuffer(file);
+  });
+}
+function readImageDims(file) {
+  return new Promise(function (resolve) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(url); };
+    img.onerror = function () { resolve(null); URL.revokeObjectURL(url); };
+    img.src = url;
+  });
+}
 
 function renderCatalog() {
   renderJob += 1;
