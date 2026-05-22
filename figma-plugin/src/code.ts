@@ -587,6 +587,7 @@ async function buildScreen(
       } catch {}
       missing.push(instr.variantPath);
       uiLog(`    ✗ missing → placeholder`, '#fca5a5');
+    }
   }
 
   // ── PASS 2: Custom (non-DS) elements parsed from TSX ────────────
@@ -598,7 +599,6 @@ async function buildScreen(
     } catch (e) {
       uiLog(`! custom node pass failed: ${(e as Error).message}`, '#fca5a5');
     }
-  }
   }
 
   if (!targetFrame) {
