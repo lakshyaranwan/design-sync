@@ -425,16 +425,16 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             missing.push(instr.variantPath);
             uiLog(`    ✗ missing → placeholder`, '#fca5a5');
         }
-        // ── PASS 2: Custom (non-DS) elements parsed from TSX ────────────
-        let customCount = 0;
-        if (options.customInstructions && options.customInstructions.length > 0) {
-            uiLog(`▸ rendering ${options.customInstructions.length} custom elements`, '#93c5fd');
-            try {
-                customCount = await buildCustomNodes(options.customInstructions, frame);
-            }
-            catch (e) {
-                uiLog(`! custom node pass failed: ${e.message}`, '#fca5a5');
-            }
+    }
+    // ── PASS 2: Custom (non-DS) elements parsed from TSX ────────────
+    let customCount = 0;
+    if (options.customInstructions && options.customInstructions.length > 0) {
+        uiLog(`▸ rendering ${options.customInstructions.length} custom elements`, '#93c5fd');
+        try {
+            customCount = await buildCustomNodes(options.customInstructions, frame);
+        }
+        catch (e) {
+            uiLog(`! custom node pass failed: ${e.message}`, '#fca5a5');
         }
     }
     if (!targetFrame) {
@@ -736,7 +736,6 @@ function mapAlign(val) {
         'flex-start': 'MIN', 'start': 'MIN',
         'center': 'CENTER',
         'flex-end': 'MAX', 'end': 'MAX',
-        'stretch': 'STRETCH',
     };
     return map[val ?? 'flex-start'] ?? 'MIN';
 }
