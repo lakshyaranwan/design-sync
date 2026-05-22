@@ -21,6 +21,7 @@
   .scroll { max-height: 240px; overflow: auto; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
   .item { padding: 3px 0; border-bottom: 1px solid #f5f5f5; }
   .item:last-child { border-bottom: none; }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -42,22 +43,27 @@
 <div class="status" id="status"></div>
 
 <h2>Library Catalog <span class="muted" id="catalogMeta"></span></h2>
+<div class="row toolbar"><button id="loadCachedBtn">Show cached catalog</button><span class="muted" id="catalogSummary"></span></div>
 <div id="catalog"><div class="muted">Not fetched yet.</div></div>
 
 <h2>Attached to This File</h2>
-<div class="row"><button id="rescanBtn">Rescan attached</button></div>
+<div class="row toolbar"><button id="rescanPageBtn">Scan current page</button><button id="rescanFileBtn">Scan whole file</button></div>
 <div id="attached"></div>
 
 <script>
-var state = { hasToken: false, libraryUrl: '', catalog: null, attached: null };
+var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null };
+var renderJob = 0;
 
 function $(id) { return document.getElementById(id); }
 function send(type, extra) { parent.postMessage({ pluginMessage: Object.assign({ type: type }, extra || {}) }, '*'); }
 
 function renderCatalog() {
+  renderJob += 1;
+  var job = renderJob;
   var el = $('catalog');
   var meta = $('catalogMeta');
-  if (!state.catalog) { el.innerHTML = '<div class="muted">Not fetched yet.</div>'; meta.textContent = ''; return; }
+  renderCatalogSummary();
+  if (!state.catalog) { el.innerHTML = '<div class="muted">Catalog is not loaded into the UI. Fetch or show the cached catalog when needed.</div>'; meta.textContent = ''; return; }
   var c = state.catalog;
   meta.textContent = '— ' + c.fileName + ' · fetched ' + new Date(c.fetchedAt).toLocaleString();
 
@@ -73,33 +79,21 @@ function renderCatalog() {
   html += '<span class="pill">' + c.componentSets.length + ' sets</span>';
   html += '<span class="pill">' + c.styles.length + ' styles</span></div>';
 
-  html += '<details open><summary>Component Sets (' + c.componentSets.length + ')</summary><div class="scroll">';
-  c.componentSets.forEach(function (s) {
-    html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
-    if (s.description) html += ' <span class="muted">— ' + escapeHtml(s.description) + '</span>';
-    html += '<div class="muted">key: ' + s.key + '</div></div>';
-  });
-  html += '</div></details>';
-
-  html += '<details><summary>Components (' + c.components.length + ')</summary><div class="scroll">';
-  c.components.forEach(function (comp) {
-    html += '<div class="item"><strong>' + escapeHtml(comp.name) + '</strong>';
-    if (comp.componentSetId) html += ' <span class="pill">variant</span>';
-    html += '<div class="muted">key: ' + comp.key + '</div></div>';
-  });
-  html += '</div></details>';
+  html += '<details open><summary>Component Sets (' + c.componentSets.length + ')</summary><div class="scroll" id="setsList"></div></details>';
+  html += '<details><summary>Components (' + c.components.length + ')</summary><div class="scroll" id="componentsList"></div></details>';
 
   Object.keys(stylesByType).sort().forEach(function (t) {
     var arr = stylesByType[t];
-    html += '<details><summary>' + t + ' styles (' + arr.length + ')</summary><div class="scroll">';
-    arr.forEach(function (s) {
-      html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
-      html += '<div class="muted">key: ' + s.key + '</div></div>';
-    });
+    html += '<details><summary>' + t + ' styles (' + arr.length + ')</summary><div class="scroll" id="styles-' + escapeAttr(t) + '"></div>';
     html += '</div></details>';
   });
 
   el.innerHTML = html;
+  renderItemsBatched($('setsList'), c.componentSets, renderSetItem, job);
+  renderItemsBatched($('componentsList'), c.components, renderComponentItem, job);
+  Object.keys(stylesByType).sort().forEach(function (t) {
+    renderItemsBatched($('styles-' + t), stylesByType[t], renderStyleItem, job);
+  });
 }
 
 function renderAttached() {
