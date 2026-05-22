@@ -118,24 +118,21 @@ async function fetchLibraryCatalog(fileKey, token) {
 
   var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
   var styles = (stylesResp.meta && stylesResp.meta.styles) || [];
-  post('status', { message: 'Fetched ' + styles.length + ' styles. Fetching file metadata...' });
-
-  var fileMeta = await figmaApi('/v1/files/' + fileKey + '?depth=1', token);
+  post('status', { message: 'Fetched ' + styles.length + ' styles. Preparing catalog...' });
 
   return {
     fileKey: fileKey,
-    fileName: fileMeta.name || 'Unknown file',
-    lastModified: fileMeta.lastModified || null,
+    fileName: 'Library ' + fileKey,
+    lastModified: null,
     fetchedAt: new Date().toISOString(),
     components: components.map(function (c) {
       return {
         key: c.key, name: c.name, description: c.description || '',
-        containingFrame: c.containing_frame || null,
         componentSetId: c.component_set_id || null
       };
     }),
     componentSets: componentSets.map(function (s) {
-      return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
+      return { key: s.key, name: s.name, description: s.description || '' };
     }),
     styles: styles.map(function (s) {
       return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
