@@ -208,10 +208,12 @@ async function importFromCatalog(match) {
   try {
     if (match.kind === 'set') {
       var set = await figma.importComponentSetByKeyAsync(match.key);
-      return { node: set.defaultVariant || set, isSet: true, set: set };
+      return { node: set.defaultVariant || set, isSet: true, set: set, exactVariant: false };
     }
     var comp = await figma.importComponentByKeyAsync(match.key);
-    return { node: comp, isSet: false };
+    // When matched via figmaNodeId the key is the EXACT variant — skip setProperties guessing.
+    var exact = match.matchType === 'component-nodeId' || match.matchType === 'instr-key';
+    return { node: comp, isSet: false, exactVariant: exact };
   } catch (e) {
     return null;
   }
