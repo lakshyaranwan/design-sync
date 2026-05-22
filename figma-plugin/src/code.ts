@@ -1232,10 +1232,33 @@ figma.ui.onmessage = async (msg) => {
         const n = await figma.getNodeByIdAsync(payload.targetFrameId);
         if (n && n.type === 'FRAME') target = n as FrameNode;
       }
+      figma.ui.postMessage({
+        type: 'parsed',
+        payload: {
+          preview,
+          warnings,
+          customGroups,
+          customCount: parsedCustomInstructions.length,
+        },
+      });
+      return;
+    }
+
+    if (type === 'build') {
+      if (!parsedManifest || !parsedInstructions.length) {
+        uiError('Parse a usage.json first.');
+        return;
+      }
+      let target: FrameNode | null = null;
+      if (payload.targetFrameId && payload.targetFrameId !== '__new__') {
+        const n = await figma.getNodeByIdAsync(payload.targetFrameId);
+        if (n && n.type === 'FRAME') target = n as FrameNode;
+      }
       const report = await buildScreen(parsedManifest, parsedInstructions, target, {
         width: payload.width,
         height: payload.height,
         mode: payload.mode,
+        customInstructions: parsedCustomInstructions,
       });
       figma.ui.postMessage({ type: 'built', payload: report });
       uiLog(`done · ${report.exactMatch + report.nameMatch}/${report.total} placed`, '#86efac');
