@@ -160,11 +160,12 @@ async function fetchLibraryCatalog(fileKey, token) {
 async function bootstrap() {
   var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
   var libraryUrl = await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
-  var catalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+  var catalogSummary = await figma.clientStorage.getAsync(STORAGE_CATALOG_SUMMARY);
   post('init', {
     hasToken: !!token,
     libraryUrl: libraryUrl || '',
-    catalog: catalog || null,
+    catalogSummary: catalogSummary || null,
+    catalog: null,
     attached: null
   });
 }
@@ -180,9 +181,11 @@ figma.ui.onmessage = async function (msg) {
       await figma.clientStorage.deleteAsync(STORAGE_TOKEN);
       await figma.clientStorage.deleteAsync(STORAGE_LIBRARY_URL);
       await figma.clientStorage.deleteAsync(STORAGE_CATALOG);
+      await figma.clientStorage.deleteAsync(STORAGE_CATALOG_SUMMARY);
       post('status', { message: 'Cleared.' });
       post('config-saved', { hasToken: false, libraryUrl: '' });
       post('catalog', { catalog: null });
+      post('catalog-summary', { catalogSummary: null });
     } else if (msg.type === 'fetch-catalog') {
       var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
       var libraryUrl = msg.libraryUrl || await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
@@ -192,10 +195,25 @@ figma.ui.onmessage = async function (msg) {
       if (libraryUrl) await figma.clientStorage.setAsync(STORAGE_LIBRARY_URL, libraryUrl);
       var catalog = await fetchLibraryCatalog(fileKey, token);
       await figma.clientStorage.setAsync(STORAGE_CATALOG, catalog);
+      var summary = {
+        fileKey: catalog.fileKey,
+        fileName: catalog.fileName,
+        lastModified: catalog.lastModified,
+        fetchedAt: catalog.fetchedAt,
+        componentCount: catalog.components.length,
+        componentSetCount: catalog.componentSets.length,
+        styleCount: catalog.styles.length
+      };
+      await figma.clientStorage.setAsync(STORAGE_CATALOG_SUMMARY, summary);
+      post('catalog-summary', { catalogSummary: summary });
       post('catalog', { catalog: catalog });
       post('status', { message: 'Fetched ' + catalog.components.length + ' components, ' + catalog.componentSets.length + ' sets, ' + catalog.styles.length + ' styles.' });
+    } else if (msg.type === 'load-cached-catalog') {
+      var cachedCatalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+      post('catalog', { catalog: cachedCatalog || null });
+      post('status', { message: cachedCatalog ? 'Loaded cached catalog.' : 'No cached catalog found.' });
     } else if (msg.type === 'rescan-attached') {
-      var attached = await listAttached();
+      var attached = await listAttached(msg.scope === 'file' ? 'file' : 'page');
       post('attached', { attached: attached });
       post('status', { message: 'Rescanned.' });
     } else if (msg.type === 'close') {
