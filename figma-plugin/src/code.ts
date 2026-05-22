@@ -71,9 +71,49 @@ const SECTION_ORDER = [
 // Known designMdVersions this plugin understands
 const KNOWN_MD_VERSIONS = ['1.0', '1.1', '1.2'];
 
+// ---------- Custom (non-DS) element types ----------
+type CustomNodeCategory = 'custom-frame' | 'custom-text' | 'custom-rect';
+
+interface CustomRenderInstruction {
+  id: string;
+  category: CustomNodeCategory;
+  depth: number;
+  parentId: string | null;
+  tag: string;
+  className?: string;
+  textContent?: string;
+  inferredType?: 'frame' | 'text' | 'rect' | 'image-placeholder' | 'icon-placeholder' | 'divider';
+  sectionName?: string;
+  styles: {
+    display?: string;
+    flexDirection?: string;
+    justifyContent?: string;
+    alignItems?: string;
+    gap?: number;
+    paddingTop?: number;
+    paddingBottom?: number;
+    paddingLeft?: number;
+    paddingRight?: number;
+    width?: number | string;
+    height?: number | string;
+    backgroundColor?: string;
+    color?: string;
+    fontSize?: number;
+    fontWeight?: number;
+    lineHeight?: number;
+    borderRadius?: number;
+    opacity?: number;
+    position?: string;
+    bottom?: number;
+    boxShadow?: string;
+  };
+  orderIndex: number;
+}
+
 // ---------- State ----------
 let parsedManifest: UsageManifest | null = null;
 let parsedInstructions: PlacementInstruction[] = [];
+let parsedCustomInstructions: CustomRenderInstruction[] = [];
 
 // ---------- UI ----------
 figma.showUI(__html__, { width: 880, height: 620 });
