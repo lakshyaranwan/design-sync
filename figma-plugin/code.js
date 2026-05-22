@@ -510,6 +510,27 @@ figma.ui.onmessage = async function (msg) {
       var result = await buildScreen(msg);
       post('build-complete', result);
       post('status', { message: 'Placed ' + result.placed + ', missing ' + result.missing + '.' });
+    } else if (msg.type === 'capture-from-url') {
+      var url = (msg.url || 'http://localhost:8765/capture/latest').replace(/\/$/, '');
+      post('status', { message: 'Fetching capture from ' + url + ' …' });
+      var res = await fetch(url);
+      if (!res.ok) { post('status', { message: 'Capture fetch failed: ' + res.status }); return; }
+      var data = await res.json();
+      // Expected: { screenshotBase64, usageJson, tsx, width, height }
+      var bytes = null;
+      if (data.screenshotBase64) {
+        var bin = atob(data.screenshotBase64.replace(/^data:image\/[a-z]+;base64,/, ''));
+        bytes = new Uint8Array(bin.length);
+        for (var bi = 0; bi < bin.length; bi++) bytes[bi] = bin.charCodeAt(bi);
+      }
+      var parsed = await parseInstructions(data.usageJson, data.tsx || '');
+      post('captured', {
+        parsed: parsed,
+        screenshotBytes: bytes,
+        width: data.width || (parsed.width || 0),
+        height: data.height || (parsed.height || 0)
+      });
+      post('status', { message: 'Captured ' + parsed.instructions.length + ' instructions.' });
     } else if (msg.type === 'close') {
       figma.closePlugin();
     }
