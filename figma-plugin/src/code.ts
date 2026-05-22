@@ -525,7 +525,27 @@ async function buildScreen(
     const { node, matchType } = await resolveComponent(instr, options.mode);
 
     if (node && sectionFrame) {
-      const instance = node.createInstance();
+      // Link to parent ComponentSet (so layers panel shows "Button", not
+      // "Button/Primary/Large"). Instantiate from the set's default variant
+      // and then apply the desired variant via setProperties.
+      let instance: InstanceNode;
+      const parentSet = node.parent;
+      if (parentSet && parentSet.type === 'COMPONENT_SET') {
+        const set = parentSet as ComponentSetNode;
+        const seed = set.defaultVariant ?? node;
+        instance = seed.createInstance();
+        const variantProps = parseVariantPath(instr.variantPath);
+        const sample = (set.children[0] as any)?.variantProperties as Record<string, string> | undefined;
+        if (sample && sample.Mode) variantProps['Mode'] = options.mode;
+        try {
+          if (Object.keys(variantProps).length) (instance as any).setProperties(variantProps);
+        } catch (e) {
+          uiLog(`    ! setProperties failed: ${(e as Error).message}`, '#fbbf24');
+        }
+      } else {
+        instance = node.createInstance();
+      }
+
       applyProps(instance, instr.props, options.mode);
       if (instr.props && instr.props.label) {
         await setTextContent(instance, String(instr.props.label));
