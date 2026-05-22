@@ -1,8 +1,9 @@
 {
   "compilerOptions": {
-    "target": "ES2018",
+    "target": "ES5",
     "module": "commonjs",
     "lib": ["ES2020"],
+    "downlevelIteration": true,
     "strict": true,
     "esModuleInterop": true,
     "typeRoots": ["./node_modules/@types", "./node_modules/@figma"]
