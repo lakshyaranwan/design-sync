@@ -654,7 +654,384 @@ function splitFrame(frame: FrameNode, maxHeight: number) {
   }
 }
 
-// ---------- Re-sync / Audit / Reverse export ----------
+// ---------- Custom (non-DS) parser + builder ----------
+function parseFullTsx(tsxText: string): {
+  hints: JsxHint[];
+  customInstructions: CustomRenderInstruction[];
+  sectionMap: Record<string, string>;
+} {
+  const hints: JsxHint[] = [];
+  const customInstructions: CustomRenderInstruction[] = [];
+  const sectionMap: Record<string, string> = {};
+
+  const TOKEN_HEX: Record<string, string> = {
+    'color.light.primary.500': '#1c3fcaff',
+    'color.light.primary.50': '#f3f6fdff',
+    'color.shade.white': '#ffffffff',
+    'color.shade.black': '#030612ff',
+    'color.light.neutral.50': '#f5f6fbff',
+    'color.light.neutral.100': '#ecedf3ff',
+    'color.light.neutral.300': '#c8cad4ff',
+    'color.light.neutral.500': '#6b7280ff',
+    'color.light.neutral.900': '#111827ff',
+  };
+
+  function resolveColorValue(raw: string): string {
+    const tokenMatch = raw.match(/tokens\[['"]([^'"]+)['"]\]/);
+    if (tokenMatch) return TOKEN_HEX[tokenMatch[1]] ?? raw;
+    if (raw.startsWith('#')) return raw;
+    if (raw.startsWith('rgb')) return raw;
+    return raw;
+  }
+
+  function parseInlineStyles(styleStr: string): CustomRenderInstruction['styles'] {
+    const styles: CustomRenderInstruction['styles'] = {};
+    const pairs = styleStr.matchAll(/(\w+):\s*([^,}]+)/g);
+    for (const match of pairs as any) {
+      const key = match[1];
+      const rawVal = match[2];
+      const val = String(rawVal).trim().replace(/['"]/g, '');
+      switch (key) {
+        case 'display': styles.display = val; break;
+        case 'flexDirection': styles.flexDirection = val; break;
+        case 'justifyContent': styles.justifyContent = val; break;
+        case 'alignItems': styles.alignItems = val; break;
+        case 'gap': styles.gap = parseFloat(val); break;
+        case 'paddingTop': styles.paddingTop = parseFloat(val); break;
+        case 'paddingBottom': styles.paddingBottom = parseFloat(val); break;
+        case 'paddingLeft': styles.paddingLeft = parseFloat(val); break;
+        case 'paddingRight': styles.paddingRight = parseFloat(val); break;
+        case 'padding': {
+          const p = parseFloat(val);
+          styles.paddingTop = styles.paddingBottom = styles.paddingLeft = styles.paddingRight = p;
+          break;
+        }
+        case 'width': styles.width = val.includes('%') ? 'fill' : parseFloat(val); break;
+        case 'height': styles.height = val.includes('%') ? 'fill' : parseFloat(val); break;
+        case 'backgroundColor': styles.backgroundColor = resolveColorValue(String(rawVal).trim()); break;
+        case 'color': styles.color = resolveColorValue(String(rawVal).trim()); break;
+        case 'fontSize': styles.fontSize = parseFloat(val); break;
+        case 'fontWeight': styles.fontWeight = parseFloat(val); break;
+        case 'lineHeight': styles.lineHeight = parseFloat(val); break;
+        case 'borderRadius': styles.borderRadius = parseFloat(val); break;
+        case 'opacity': styles.opacity = parseFloat(val); break;
+        case 'position': styles.position = val; break;
+        case 'bottom': styles.bottom = parseFloat(val); break;
+        case 'boxShadow': styles.boxShadow = String(rawVal).trim(); break;
+      }
+    }
+    return styles;
+  }
+
+  const lines = tsxText.split('\n');
+  let currentSection = 'Body';
+  let orderIndex = 0;
+  let depth = 0;
+  const depthStack: string[] = ['root'];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    const sectionMatch = line.match(/\{\/\*\s*Section:\s*([A-Za-z0-9_-]+)\s*\*\/\}/);
+    if (sectionMatch) {
+      currentSection = sectionMatch[1];
+      continue;
+    }
+
+    if (line.includes('data-ds-component=')) {
+      const compM = line.match(/data-ds-component=["']([^"']+)["']/);
+      const variantM = line.match(/data-ds-variant=["']([^"']+)["']/);
+      const nodeIdM = line.match(/data-ds-node-id=["']([^"']+)["']/);
+      if (compM) {
+        const hint: JsxHint = { component: compM[1] };
+        if (variantM) hint.variant = variantM[1];
+        if (nodeIdM) hint.nodeId = nodeIdM[1];
+        hints.push(hint);
+      }
+      continue;
+    }
+
+    const openTagMatch = line.match(/^\s*<(div|section|main|header|footer|p|h[1-6]|span)\s/);
+    if (openTagMatch) {
+      const tag = openTagMatch[1];
+      const id = `node-${orderIndex.toString().padStart(3, '0')}`;
+      const parentId = depthStack[depthStack.length - 1] ?? 'root';
+
+      const styleMatch = line.match(/style=\{\{(.+?)(?:\}\}|$)/s);
+      let styleStr = styleMatch ? styleMatch[1] : '';
+      if (styleMatch && !line.includes('}}')) {
+        for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+          styleStr += ' ' + lines[j];
+          if (lines[j].includes('}}')) { i = j; break; }
+        }
+      }
+
+      const styles = parseInlineStyles(styleStr);
+
+      let category: CustomNodeCategory = 'custom-frame';
+      let inferredType: CustomRenderInstruction['inferredType'] = 'frame';
+
+      if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span'].includes(tag)) {
+        const textMatch = (lines[i + 1] ?? '').match(/^\s*([^<{]+?)\s*$/);
+        if (textMatch) {
+          category = 'custom-text';
+          inferredType = 'text';
+        }
+      }
+
+      const prevLine = lines[i - 1] ?? '';
+      if (prevLine.includes('image:')) inferredType = 'image-placeholder';
+      if (prevLine.includes('icon:')) inferredType = 'icon-placeholder';
+      if (styles.height === 1 || (typeof styles.height === 'number' && styles.height <= 2)) {
+        inferredType = 'divider';
+      }
+
+      const instr: CustomRenderInstruction = {
+        id,
+        category,
+        depth,
+        parentId,
+        tag,
+        inferredType,
+        sectionName: currentSection,
+        styles,
+        orderIndex: orderIndex++,
+      };
+
+      if (category === 'custom-text') {
+        const textLine = lines[i + 1]?.trim();
+        if (textLine && !textLine.startsWith('<')) {
+          instr.textContent = textLine.replace(/[{}'"`]/g, '').trim();
+        }
+      }
+
+      customInstructions.push(instr);
+      depthStack.push(id);
+      depth++;
+    }
+
+    if (line.match(/^\s*<\/(div|section|main|header|footer|p|h[1-6]|span)>/)) {
+      if (depthStack.length > 1) depthStack.pop();
+      depth = Math.max(0, depth - 1);
+    }
+  }
+
+  return { hints, customInstructions, sectionMap };
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
+  const clean = hex.replace('#', '').replace(/ff$/i, '');
+  if (clean.length === 6) {
+    return {
+      r: parseInt(clean.slice(0, 2), 16) / 255,
+      g: parseInt(clean.slice(2, 4), 16) / 255,
+      b: parseInt(clean.slice(4, 6), 16) / 255,
+    };
+  }
+  const rgbMatch = hex.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+  if (rgbMatch) {
+    return {
+      r: parseInt(rgbMatch[1]) / 255,
+      g: parseInt(rgbMatch[2]) / 255,
+      b: parseInt(rgbMatch[3]) / 255,
+    };
+  }
+  return null;
+}
+
+function parseBoxShadow(shadow: string): Effect | null {
+  const m = shadow.match(/(-?\d+)px\s+(-?\d+)px\s+(\d+)px\s*(\d+)?px?\s*rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]+)?\)/);
+  if (!m) return null;
+  return {
+    type: 'DROP_SHADOW',
+    offset: { x: parseInt(m[1]), y: parseInt(m[2]) },
+    radius: parseInt(m[3]),
+    spread: parseInt(m[4] ?? '0'),
+    color: {
+      r: parseInt(m[5]) / 255,
+      g: parseInt(m[6]) / 255,
+      b: parseInt(m[7]) / 255,
+      a: parseFloat(m[8] ?? '1'),
+    },
+    blendMode: 'NORMAL',
+    showShadowBehindNode: false,
+    visible: true,
+  };
+}
+
+function mapJustify(val?: string): FrameNode['primaryAxisAlignItems'] {
+  const map: Record<string, FrameNode['primaryAxisAlignItems']> = {
+    'flex-start': 'MIN', 'start': 'MIN',
+    'center': 'CENTER',
+    'flex-end': 'MAX', 'end': 'MAX',
+    'space-between': 'SPACE_BETWEEN',
+  };
+  return map[val ?? 'flex-start'] ?? 'MIN';
+}
+
+function mapAlign(val?: string): FrameNode['counterAxisAlignItems'] {
+  const map: Record<string, FrameNode['counterAxisAlignItems']> = {
+    'flex-start': 'MIN', 'start': 'MIN',
+    'center': 'CENTER',
+    'flex-end': 'MAX', 'end': 'MAX',
+    'stretch': 'STRETCH',
+  };
+  return map[val ?? 'flex-start'] ?? 'MIN';
+}
+
+function applyFrameSizing(frame: FrameNode, instr: CustomRenderInstruction, parent: FrameNode) {
+  if (parent.layoutMode === 'NONE') return;
+  if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
+    try { frame.layoutSizingHorizontal = 'FILL'; } catch {}
+  } else if (typeof instr.styles.width === 'number') {
+    try { frame.layoutSizingHorizontal = 'FIXED'; } catch {}
+    frame.resize(instr.styles.width, frame.height || 1);
+  } else {
+    try { frame.layoutSizingHorizontal = 'HUG'; } catch {}
+  }
+  if (typeof instr.styles.height === 'number') {
+    try { frame.layoutSizingVertical = 'FIXED'; } catch {}
+    frame.resize(frame.width || 1, instr.styles.height);
+  } else {
+    try { frame.layoutSizingVertical = 'HUG'; } catch {}
+  }
+}
+
+function applyRectSizing(rect: RectangleNode, instr: CustomRenderInstruction, parent: FrameNode) {
+  if (parent.layoutMode === 'NONE') return;
+  if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
+    try { (rect as any).layoutSizingHorizontal = 'FILL'; } catch {}
+  }
+}
+
+async function buildCustomNodes(
+  instructions: CustomRenderInstruction[],
+  rootFrame: FrameNode,
+): Promise<number> {
+  const nodeMap = new Map<string, FrameNode | TextNode | RectangleNode>();
+  nodeMap.set('root', rootFrame as any);
+  let count = 0;
+
+  function getSectionFrame(sectionName: string): FrameNode {
+    for (const child of rootFrame.children) {
+      if (child.name === sectionName && child.type === 'FRAME') return child as FrameNode;
+    }
+    const sf = figma.createFrame();
+    sf.name = sectionName;
+    sf.layoutMode = 'VERTICAL';
+    sf.counterAxisSizingMode = 'FIXED';
+    sf.primaryAxisSizingMode = 'AUTO';
+    sf.fills = [];
+    rootFrame.appendChild(sf);
+    try { sf.layoutSizingHorizontal = 'FILL'; } catch {}
+    return sf;
+  }
+
+  for (const instr of instructions) {
+    const parentNode =
+      (nodeMap.get(instr.parentId ?? 'root') as FrameNode | undefined) ??
+      getSectionFrame(instr.sectionName ?? 'Body');
+
+    let created: FrameNode | TextNode | RectangleNode | null = null;
+
+    try {
+      if (instr.category === 'custom-text') {
+        const t = figma.createText();
+        const weight = instr.styles.fontWeight ?? 400;
+        const style = weight >= 700 ? 'Bold' : weight >= 600 ? 'SemiBold' : weight >= 500 ? 'Medium' : 'Regular';
+        try { await figma.loadFontAsync({ family: 'Inter', style }); } catch {
+          await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+        }
+        t.fontName = { family: 'Inter', style };
+        t.characters = instr.textContent ?? '';
+        if (instr.styles.fontSize) t.fontSize = instr.styles.fontSize;
+        if (instr.styles.lineHeight) t.lineHeight = { value: instr.styles.lineHeight, unit: 'PIXELS' };
+        if (instr.styles.color) {
+          const col = hexToRgb(instr.styles.color);
+          if (col) t.fills = [{ type: 'SOLID', color: col }];
+        }
+        t.setPluginData('ds-linked', 'false');
+        t.setPluginData('ds-custom-type', 'text');
+        parentNode.appendChild(t);
+        created = t;
+      } else if (
+        instr.inferredType === 'image-placeholder' ||
+        instr.inferredType === 'icon-placeholder' ||
+        instr.inferredType === 'divider'
+      ) {
+        const r = figma.createRectangle();
+        r.name = instr.inferredType === 'divider'
+          ? '[divider]'
+          : `[${instr.inferredType}] ${instr.className ?? ''}`;
+        const w = typeof instr.styles.width === 'number' ? instr.styles.width : 40;
+        const h = typeof instr.styles.height === 'number' ? instr.styles.height : 40;
+        r.resize(Math.max(1, w), Math.max(1, h));
+        if (instr.styles.backgroundColor) {
+          const col = hexToRgb(instr.styles.backgroundColor);
+          if (col) r.fills = [{ type: 'SOLID', color: col }];
+        }
+        if (instr.styles.borderRadius) r.cornerRadius = instr.styles.borderRadius;
+        r.setPluginData('ds-linked', 'false');
+        r.setPluginData('ds-custom-type', instr.inferredType ?? 'rect');
+        parentNode.appendChild(r);
+        applyRectSizing(r, instr, parentNode);
+        created = r;
+      } else {
+        const f = figma.createFrame();
+        f.name = instr.className ?? instr.tag ?? 'frame';
+        f.fills = [];
+
+        if (instr.styles.display === 'flex') {
+          f.layoutMode = instr.styles.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
+          f.primaryAxisSizingMode = 'AUTO';
+          f.counterAxisSizingMode = 'AUTO';
+          if (instr.styles.gap) f.itemSpacing = instr.styles.gap;
+          if (instr.styles.paddingTop) f.paddingTop = instr.styles.paddingTop;
+          if (instr.styles.paddingBottom) f.paddingBottom = instr.styles.paddingBottom;
+          if (instr.styles.paddingLeft) f.paddingLeft = instr.styles.paddingLeft;
+          if (instr.styles.paddingRight) f.paddingRight = instr.styles.paddingRight;
+          f.primaryAxisAlignItems = mapJustify(instr.styles.justifyContent);
+          f.counterAxisAlignItems = mapAlign(instr.styles.alignItems);
+        } else {
+          f.layoutMode = 'NONE';
+        }
+
+        if (instr.styles.backgroundColor) {
+          const col = hexToRgb(instr.styles.backgroundColor);
+          if (col) f.fills = [{ type: 'SOLID', color: col }];
+        }
+        if (instr.styles.borderRadius) f.cornerRadius = instr.styles.borderRadius;
+        if (instr.styles.opacity !== undefined) f.opacity = instr.styles.opacity;
+        if (instr.styles.boxShadow) {
+          const shadow = parseBoxShadow(instr.styles.boxShadow);
+          if (shadow) f.effects = [shadow];
+        }
+        if (instr.styles.position === 'sticky' || instr.styles.position === 'fixed') {
+          f.name = '[sticky] ' + f.name;
+          f.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+        }
+
+        f.setPluginData('ds-linked', 'false');
+        f.setPluginData('ds-custom-type', 'frame');
+
+        parentNode.appendChild(f);
+        applyFrameSizing(f, instr, parentNode);
+        created = f;
+      }
+
+      if (created) {
+        nodeMap.set(instr.id, created);
+        count++;
+      }
+    } catch (e) {
+      uiLog(`  ! custom node ${instr.tag} failed: ${(e as Error).message}`, '#fbbf24');
+    }
+  }
+
+  return count;
+}
+
+
 async function resyncSelection() {
   const sel = figma.currentPage.selection[0];
   if (!sel || sel.type !== 'FRAME') {
