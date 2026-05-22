@@ -21,6 +21,7 @@
   .scroll { max-height: 240px; overflow: auto; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
   .item { padding: 3px 0; border-bottom: 1px solid #f5f5f5; }
   .item:last-child { border-bottom: none; }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -42,22 +43,27 @@
 <div class="status" id="status"></div>
 
 <h2>Library Catalog <span class="muted" id="catalogMeta"></span></h2>
+<div class="row toolbar"><button id="loadCachedBtn">Show cached catalog</button><span class="muted" id="catalogSummary"></span></div>
 <div id="catalog"><div class="muted">Not fetched yet.</div></div>
 
 <h2>Attached to This File</h2>
-<div class="row"><button id="rescanBtn">Rescan attached</button></div>
+<div class="row toolbar"><button id="rescanPageBtn">Scan current page</button><button id="rescanFileBtn">Scan whole file</button></div>
 <div id="attached"></div>
 
 <script>
-var state = { hasToken: false, libraryUrl: '', catalog: null, attached: null };
+var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null };
+var renderJob = 0;
 
 function $(id) { return document.getElementById(id); }
 function send(type, extra) { parent.postMessage({ pluginMessage: Object.assign({ type: type }, extra || {}) }, '*'); }
 
 function renderCatalog() {
+  renderJob += 1;
+  var job = renderJob;
   var el = $('catalog');
   var meta = $('catalogMeta');
-  if (!state.catalog) { el.innerHTML = '<div class="muted">Not fetched yet.</div>'; meta.textContent = ''; return; }
+  renderCatalogSummary();
+  if (!state.catalog) { el.innerHTML = '<div class="muted">Catalog is not loaded into the UI. Fetch or show the cached catalog when needed.</div>'; meta.textContent = ''; return; }
   var c = state.catalog;
   meta.textContent = '— ' + c.fileName + ' · fetched ' + new Date(c.fetchedAt).toLocaleString();
 
@@ -73,33 +79,58 @@ function renderCatalog() {
   html += '<span class="pill">' + c.componentSets.length + ' sets</span>';
   html += '<span class="pill">' + c.styles.length + ' styles</span></div>';
 
-  html += '<details open><summary>Component Sets (' + c.componentSets.length + ')</summary><div class="scroll">';
-  c.componentSets.forEach(function (s) {
-    html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
-    if (s.description) html += ' <span class="muted">— ' + escapeHtml(s.description) + '</span>';
-    html += '<div class="muted">key: ' + s.key + '</div></div>';
-  });
-  html += '</div></details>';
-
-  html += '<details><summary>Components (' + c.components.length + ')</summary><div class="scroll">';
-  c.components.forEach(function (comp) {
-    html += '<div class="item"><strong>' + escapeHtml(comp.name) + '</strong>';
-    if (comp.componentSetId) html += ' <span class="pill">variant</span>';
-    html += '<div class="muted">key: ' + comp.key + '</div></div>';
-  });
-  html += '</div></details>';
+  html += '<details open><summary>Component Sets (' + c.componentSets.length + ')</summary><div class="scroll" id="setsList"></div></details>';
+  html += '<details><summary>Components (' + c.components.length + ')</summary><div class="scroll" id="componentsList"></div></details>';
 
   Object.keys(stylesByType).sort().forEach(function (t) {
     var arr = stylesByType[t];
-    html += '<details><summary>' + t + ' styles (' + arr.length + ')</summary><div class="scroll">';
-    arr.forEach(function (s) {
-      html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
-      html += '<div class="muted">key: ' + s.key + '</div></div>';
-    });
-    html += '</div></details>';
+    html += '<details><summary>' + escapeHtml(t) + ' styles (' + arr.length + ')</summary><div class="scroll" id="styles-' + safeId(t) + '"></div></details>';
   });
 
   el.innerHTML = html;
+  renderItemsBatched($('setsList'), c.componentSets, renderSetItem, job);
+  renderItemsBatched($('componentsList'), c.components, renderComponentItem, job);
+  Object.keys(stylesByType).sort().forEach(function (t) {
+    renderItemsBatched($('styles-' + safeId(t)), stylesByType[t], renderStyleItem, job);
+  });
+}
+
+function renderCatalogSummary() {
+  var s = state.catalogSummary;
+  $('catalogSummary').textContent = s
+    ? s.fileName + ' · ' + s.componentCount + ' components · ' + s.componentSetCount + ' sets · ' + s.styleCount + ' styles'
+    : '';
+}
+
+function renderItemsBatched(container, items, renderer, job) {
+  if (!container) return;
+  container.textContent = '';
+  var index = 0;
+  function step() {
+    if (job !== renderJob) return;
+    var html = '';
+    var end = Math.min(index + 80, items.length);
+    for (; index < end; index++) html += renderer(items[index]);
+    container.insertAdjacentHTML('beforeend', html);
+    if (index < items.length) setTimeout(step, 0);
+  }
+  step();
+}
+
+function renderSetItem(s) {
+  var html = '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
+  if (s.description) html += ' <span class="muted">— ' + escapeHtml(s.description) + '</span>';
+  return html + '<div class="muted">key: ' + escapeHtml(s.key) + '</div></div>';
+}
+
+function renderComponentItem(comp) {
+  var html = '<div class="item"><strong>' + escapeHtml(comp.name) + '</strong>';
+  if (comp.componentSetId) html += ' <span class="pill">variant</span>';
+  return html + '<div class="muted">key: ' + escapeHtml(comp.key) + '</div></div>';
+}
+
+function renderStyleItem(s) {
+  return '<div class="item"><strong>' + escapeHtml(s.name) + '</strong><div class="muted">key: ' + escapeHtml(s.key) + '</div></div>';
 }
 
 function renderAttached() {
@@ -131,6 +162,10 @@ function escapeHtml(s) {
   });
 }
 
+function safeId(s) {
+  return String(s == null ? 'other' : s).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
 $('saveBtn').onclick = function () {
   send('save-config', { token: $('token').value.trim(), libraryUrl: $('libraryUrl').value.trim() });
 };
@@ -138,7 +173,9 @@ $('fetchBtn').onclick = function () {
   send('fetch-catalog', { libraryUrl: $('libraryUrl').value.trim() });
 };
 $('clearBtn').onclick = function () { send('clear-config'); };
-$('rescanBtn').onclick = function () { send('rescan-attached'); };
+$('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
+$('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
+$('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
 
 window.onmessage = function (event) {
   var msg = event.data.pluginMessage;
@@ -148,6 +185,7 @@ window.onmessage = function (event) {
     state.hasToken = msg.hasToken;
     state.libraryUrl = msg.libraryUrl || '';
     state.catalog = msg.catalog || null;
+    state.catalogSummary = msg.catalogSummary || null;
     state.attached = msg.attached || null;
     $('libraryUrl').value = state.libraryUrl;
     $('token').placeholder = state.hasToken ? 'Token saved (enter new to replace)' : 'Personal access token (saved locally)';
@@ -161,7 +199,12 @@ window.onmessage = function (event) {
   }
   else if (msg.type === 'catalog') {
     state.catalog = msg.catalog;
+    if (!msg.catalog) state.catalogSummary = null;
     renderCatalog();
+  }
+  else if (msg.type === 'catalog-summary') {
+    state.catalogSummary = msg.catalogSummary;
+    renderCatalogSummary();
   }
   else if (msg.type === 'attached') {
     state.attached = msg.attached;

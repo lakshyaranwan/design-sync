@@ -8,6 +8,7 @@ figma.showUI(__html__, { width: 560, height: 760 });
 var STORAGE_TOKEN = 'figma_pat';
 var STORAGE_LIBRARY_URL = 'library_file_url';
 var STORAGE_CATALOG = 'library_catalog';
+var STORAGE_CATALOG_SUMMARY = 'library_catalog_summary';
 
 function post(type, payload) {
   figma.ui.postMessage(Object.assign({ type: type }, payload || {}));
@@ -33,11 +34,12 @@ function extractFileKey(url) {
 }
 
 // ---------- in-file usage scan ----------
-async function scanUsedComponents() {
-  if (typeof figma.loadAllPagesAsync === 'function') {
+async function scanUsedComponents(scope) {
+  var root = scope === 'file' ? figma.root : figma.currentPage;
+  if (scope === 'file' && typeof figma.loadAllPagesAsync === 'function') {
     await figma.loadAllPagesAsync();
   }
-  var instances = figma.root.findAll(function (node) { return node.type === 'INSTANCE'; });
+  var instances = root.findAll(function (node) { return node.type === 'INSTANCE'; });
   var byKey = {};
   for (var i = 0; i < instances.length; i++) {
     var instance = instances[i];
@@ -69,8 +71,8 @@ async function scanUsedComponents() {
   }).sort(function (a, b) { return a.name.localeCompare(b.name); });
 }
 
-async function listAttached() {
-  var result = { variableCollections: [], usedComponents: [], librariesByName: {}, errors: [] };
+async function listAttached(scope) {
+  var result = { variableCollections: [], usedComponents: [], librariesByName: {}, errors: [], scope: scope || 'page' };
   try {
     var collections = await figma.teamLibrary.getAvailableLibraryVariableCollectionsAsync();
     result.variableCollections = collections.map(function (c) {
@@ -84,7 +86,7 @@ async function listAttached() {
     result.errors.push('Variable collections: ' + (e && e.message ? e.message : String(e)));
   }
   try {
-    result.usedComponents = await scanUsedComponents();
+    result.usedComponents = await scanUsedComponents(result.scope);
   } catch (e) {
     result.errors.push('Used component scan: ' + (e && e.message ? e.message : String(e)));
   }
@@ -107,31 +109,30 @@ async function figmaApi(path, token) {
 async function fetchLibraryCatalog(fileKey, token) {
   post('status', { message: 'Fetching components...' });
   var componentsResp = await figmaApi('/v1/files/' + fileKey + '/components', token);
-  post('status', { message: 'Fetching component sets...' });
-  var setsResp = await figmaApi('/v1/files/' + fileKey + '/component_sets', token);
-  post('status', { message: 'Fetching styles...' });
-  var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
-  post('status', { message: 'Fetching file metadata...' });
-  var fileMeta = await figmaApi('/v1/files/' + fileKey + '?depth=1', token);
-
   var components = (componentsResp.meta && componentsResp.meta.components) || [];
+  post('status', { message: 'Fetched ' + components.length + ' components. Fetching component sets...' });
+
+  var setsResp = await figmaApi('/v1/files/' + fileKey + '/component_sets', token);
   var componentSets = (setsResp.meta && setsResp.meta.component_sets) || [];
+  post('status', { message: 'Fetched ' + componentSets.length + ' sets. Fetching styles...' });
+
+  var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
   var styles = (stylesResp.meta && stylesResp.meta.styles) || [];
+  post('status', { message: 'Fetched ' + styles.length + ' styles. Preparing catalog...' });
 
   return {
     fileKey: fileKey,
-    fileName: fileMeta.name || 'Unknown file',
-    lastModified: fileMeta.lastModified || null,
+    fileName: 'Library ' + fileKey,
+    lastModified: null,
     fetchedAt: new Date().toISOString(),
     components: components.map(function (c) {
       return {
         key: c.key, name: c.name, description: c.description || '',
-        containingFrame: c.containing_frame || null,
         componentSetId: c.component_set_id || null
       };
     }),
     componentSets: componentSets.map(function (s) {
-      return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
+      return { key: s.key, name: s.name, description: s.description || '' };
     }),
     styles: styles.map(function (s) {
       return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
@@ -143,11 +144,12 @@ async function fetchLibraryCatalog(fileKey, token) {
 async function bootstrap() {
   var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
   var libraryUrl = await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
-  var catalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+  var catalogSummary = await figma.clientStorage.getAsync(STORAGE_CATALOG_SUMMARY);
   post('init', {
     hasToken: !!token,
     libraryUrl: libraryUrl || '',
-    catalog: catalog || null,
+    catalogSummary: catalogSummary || null,
+    catalog: null,
     attached: null
   });
 }
@@ -163,9 +165,11 @@ figma.ui.onmessage = async function (msg) {
       await figma.clientStorage.deleteAsync(STORAGE_TOKEN);
       await figma.clientStorage.deleteAsync(STORAGE_LIBRARY_URL);
       await figma.clientStorage.deleteAsync(STORAGE_CATALOG);
+      await figma.clientStorage.deleteAsync(STORAGE_CATALOG_SUMMARY);
       post('status', { message: 'Cleared.' });
       post('config-saved', { hasToken: false, libraryUrl: '' });
       post('catalog', { catalog: null });
+      post('catalog-summary', { catalogSummary: null });
     } else if (msg.type === 'fetch-catalog') {
       var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
       var libraryUrl = msg.libraryUrl || await figma.clientStorage.getAsync(STORAGE_LIBRARY_URL);
@@ -175,10 +179,25 @@ figma.ui.onmessage = async function (msg) {
       if (libraryUrl) await figma.clientStorage.setAsync(STORAGE_LIBRARY_URL, libraryUrl);
       var catalog = await fetchLibraryCatalog(fileKey, token);
       await figma.clientStorage.setAsync(STORAGE_CATALOG, catalog);
+      var summary = {
+        fileKey: catalog.fileKey,
+        fileName: catalog.fileName,
+        lastModified: catalog.lastModified,
+        fetchedAt: catalog.fetchedAt,
+        componentCount: catalog.components.length,
+        componentSetCount: catalog.componentSets.length,
+        styleCount: catalog.styles.length
+      };
+      await figma.clientStorage.setAsync(STORAGE_CATALOG_SUMMARY, summary);
+      post('catalog-summary', { catalogSummary: summary });
       post('catalog', { catalog: catalog });
       post('status', { message: 'Fetched ' + catalog.components.length + ' components, ' + catalog.componentSets.length + ' sets, ' + catalog.styles.length + ' styles.' });
+    } else if (msg.type === 'load-cached-catalog') {
+      var cachedCatalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+      post('catalog', { catalog: cachedCatalog || null });
+      post('status', { message: cachedCatalog ? 'Loaded cached catalog.' : 'No cached catalog found.' });
     } else if (msg.type === 'rescan-attached') {
-      var attached = await listAttached();
+      var attached = await listAttached(msg.scope === 'file' ? 'file' : 'page');
       post('attached', { attached: attached });
       post('status', { message: 'Rescanned.' });
     } else if (msg.type === 'close') {
