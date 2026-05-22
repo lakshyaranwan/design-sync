@@ -215,6 +215,63 @@ $('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
 $('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
 $('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
 
+function renderParsed() {
+  var el = $('parsed');
+  var p = state.parsed;
+  if (!p) { el.innerHTML = '<div class="muted">No files parsed yet.</div>'; $('buildBtn').disabled = true; return; }
+  var matched = 0, missing = 0;
+  var rows = p.instructions.map(function (it) {
+    var ok = it.matchKey ? true : false;
+    if (ok) matched++; else missing++;
+    var badge = ok
+      ? '<span class="pill" style="background:#e6f7ec;color:#137a3b">' + escapeHtml(it.matchType) + '</span>'
+      : '<span class="pill" style="background:#fde8e8;color:#a31414">' + escapeHtml(it.matchType) + '</span>';
+    return '<div class="item">' + badge + ' <strong>' + escapeHtml(it.component) + '</strong>'
+      + (it.variantPath ? ' <span class="muted">' + escapeHtml(it.variantPath) + '</span>' : '')
+      + ' <span class="muted">@ ' + it.placement.x + ',' + it.placement.y + ' · ' + it.placement.width + '×' + it.placement.height + '</span></div>';
+  }).join('');
+  el.innerHTML = '<div class="card"><span class="pill">' + matched + ' matched</span><span class="pill">' + missing + ' missing</span>'
+    + ' <span class="muted">screen: ' + escapeHtml(p.screen) + '</span></div>'
+    + '<div class="scroll">' + (rows || '<div class="muted">No instructions in usage.json.</div>') + '</div>';
+  $('buildBtn').disabled = !(state.screenshotBytes && p.instructions.length);
+}
+
+$('shotInput').onchange = async function (e) {
+  var f = e.target.files && e.target.files[0];
+  if (!f) { state.screenshotBytes = null; state.screenshotDims = null; renderParsed(); return; }
+  state.screenshotBytes = await readFileAsBytes(f);
+  state.screenshotDims = await readImageDims(f);
+  $('status').textContent = 'Screenshot loaded' + (state.screenshotDims ? ' (' + state.screenshotDims.width + '×' + state.screenshotDims.height + ')' : '');
+  renderParsed();
+};
+
+$('parseBtn').onclick = async function () {
+  var usageFile = $('usageInput').files[0];
+  var tsxFile = $('tsxInput').files[0];
+  if (!usageFile) { $('status').textContent = 'usage.json required.'; return; }
+  var usageText = await readFileAsText(usageFile);
+  var tsxText = tsxFile ? await readFileAsText(tsxFile) : '';
+  var usageJson;
+  try { usageJson = JSON.parse(usageText); }
+  catch (e) { $('status').textContent = 'Invalid JSON: ' + e.message; return; }
+  send('parse-files', { usageJson: usageJson, tsxText: tsxText });
+};
+
+$('buildBtn').onclick = function () {
+  var p = state.parsed;
+  if (!p || !state.screenshotBytes) return;
+  var w = (state.screenshotDims && state.screenshotDims.width) || p.width || 375;
+  var h = (state.screenshotDims && state.screenshotDims.height) || p.height || 812;
+  send('build-screen', {
+    instructions: p.instructions,
+    screenshotBytes: state.screenshotBytes,
+    width: w,
+    height: h,
+    mode: $('modeSel').value || p.mode || '',
+    screenName: p.screen
+  });
+};
+
 window.onmessage = function (event) {
   var msg = event.data.pluginMessage;
   if (!msg) return;
