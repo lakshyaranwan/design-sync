@@ -100,8 +100,8 @@ function sendInit() {
                 case 1:
                     _a.trys.push([1, 5, , 6]);
                     tl = figma.teamLibrary;
-                    if (!(tl && tl.getAvailableLibraryComponentsAsync)) return [3 /*break*/, 3];
-                    return [4 /*yield*/, tl.getAvailableLibraryComponentsAsync()];
+                    if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 3];
+                    return [4 /*yield*/, tl.getAvailableComponentsAsync()];
                 case 2:
                     available = _a.sent();
                     uiLog('Library components found: ' + (available ? available.length : 0));
@@ -349,8 +349,8 @@ function resolveComponent(entry, mode) {
                 case 8:
                     _a.trys.push([8, 22, , 23]);
                     tl = figma.teamLibrary;
-                    if (!(tl && tl.getAvailableLibraryComponentsAsync)) return [3 /*break*/, 21];
-                    return [4 /*yield*/, tl.getAvailableLibraryComponentsAsync()];
+                    if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 21];
+                    return [4 /*yield*/, tl.getAvailableComponentsAsync()];
                 case 9:
                     available = _a.sent();
                     if (!entry.figmaComponentSetId) return [3 /*break*/, 15];
@@ -839,8 +839,8 @@ figma.ui.onmessage = function (msg) { return __awaiter(void 0, void 0, void 0, f
             case 10:
                 _g.trys.push([10, 13, , 14]);
                 tl = figma.teamLibrary;
-                if (!(tl && tl.getAvailableLibraryComponentsAsync)) return [3 /*break*/, 12];
-                return [4 /*yield*/, tl.getAvailableLibraryComponentsAsync()];
+                if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 12];
+                return [4 /*yield*/, tl.getAvailableComponentsAsync()];
             case 11:
                 available = _g.sent();
                 name = inst.component.toLowerCase();
