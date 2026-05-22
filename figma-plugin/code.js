@@ -118,14 +118,12 @@ async function fetchLibraryCatalog(fileKey, token) {
 
   var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
   var styles = (stylesResp.meta && stylesResp.meta.styles) || [];
-  post('status', { message: 'Fetched ' + styles.length + ' styles. Fetching file metadata...' });
-
-  var fileMeta = await figmaApi('/v1/files/' + fileKey + '?depth=1', token);
+  post('status', { message: 'Fetched ' + styles.length + ' styles. Preparing catalog...' });
 
   return {
     fileKey: fileKey,
-    fileName: fileMeta.name || 'Unknown file',
-    lastModified: fileMeta.lastModified || null,
+    fileName: 'Library ' + fileKey,
+    lastModified: null,
     fetchedAt: new Date().toISOString(),
     components: components.map(function (c) {
       return {
