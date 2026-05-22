@@ -757,7 +757,7 @@ function parseFullTsx(tsxText: string): {
       const id = `node-${orderIndex.toString().padStart(3, '0')}`;
       const parentId = depthStack[depthStack.length - 1] ?? 'root';
 
-      const styleMatch = line.match(/style=\{\{(.+?)(?:\}\}|$)/s);
+      const styleMatch = line.match(/style=\{\{([\s\S]+?)(?:\}\}|$)/);
       let styleStr = styleMatch ? styleMatch[1] : '';
       if (styleMatch && !line.includes('}}')) {
         for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
