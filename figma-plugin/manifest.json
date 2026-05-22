@@ -9,7 +9,7 @@
   "editorType": ["figma"],
   "ui": "ui.html",
   "networkAccess": {
-    "allowedDomains": ["https://api.figma.com"],
-    "reasoning": "Fetch the full design system catalog (components, component sets, styles) from a Figma library file via the Figma REST API."
+    "allowedDomains": ["https://api.figma.com", "http://localhost:*", "http://127.0.0.1:*"],
+    "reasoning": "Fetch the design system catalog from the Figma REST API, and pull screenshots + usage.json + tsx from a local capture endpoint (localhost) running alongside the user's Vite preview."
   }
 }
