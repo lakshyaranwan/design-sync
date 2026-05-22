@@ -95,24 +95,26 @@ function sendInit() {
                     frames = figma.currentPage.children
                         .filter(function (n) { return n.type === 'FRAME'; })
                         .map(function (n) { return ({ id: n.id, name: n.name }); });
-                    librariesConnected = false;
+                    librariesConnected = true;
                     _a.label = 1;
                 case 1:
-                    _a.trys.push([1, 4, , 5]);
+                    _a.trys.push([1, 5, , 6]);
                     tl = figma.teamLibrary;
                     if (!(tl && tl.getAvailableComponentsAsync)) return [3 /*break*/, 3];
                     return [4 /*yield*/, tl.getAvailableComponentsAsync()];
                 case 2:
                     available = _a.sent();
-                    librariesConnected = !!(available && available.length > 0);
                     uiLog('Library components found: ' + (available ? available.length : 0));
-                    _a.label = 3;
-                case 3: return [3 /*break*/, 5];
-                case 4:
-                    e_1 = _a.sent();
-                    librariesConnected = false;
-                    return [3 /*break*/, 5];
+                    return [3 /*break*/, 4];
+                case 3:
+                    uiLog('teamLibrary enumeration API unavailable — will rely on importComponentByKeyAsync.');
+                    _a.label = 4;
+                case 4: return [3 /*break*/, 6];
                 case 5:
+                    e_1 = _a.sent();
+                    uiLog('Library enumeration failed: ' + (e_1.message || e_1));
+                    return [3 /*break*/, 6];
+                case 6:
                     figma.ui.postMessage({ type: 'frames', payload: { frames: frames, librariesConnected: librariesConnected } });
                     return [2 /*return*/];
             }

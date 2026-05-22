@@ -317,7 +317,7 @@
       });
       if (!payload.librariesConnected) {
         $('parseErrors').innerHTML =
-          '<div class="err">No design libraries connected. Go to Assets → Libraries and enable the Sen Money design library before running this plugin.</div>';
+          '<div class="warn">Could not auto-detect connected libraries. If components fail to import, open Assets → Libraries and enable the Sen Money design library.</div>';
       }
     }
 
