@@ -320,6 +320,22 @@
         `${missingCount} component(s) will be placed as a placeholder frame.`;
       $('buildBtn').disabled = false;
 
+      // Custom elements preview
+      const cwrap = $('custom-preview');
+      const ctbody = $('custom-tbody');
+      ctbody.innerHTML = '';
+      const groups = payload.customGroups || [];
+      if (groups.length) {
+        cwrap.style.display = '';
+        groups.forEach((g) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${g.type}</td><td>${g.count}</td>`;
+          ctbody.appendChild(tr);
+        });
+      } else {
+        cwrap.style.display = 'none';
+      }
+
       if (payload.warnings && payload.warnings.length) {
         const w = document.createElement('div');
         w.className = 'warn';
