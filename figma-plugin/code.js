@@ -245,8 +245,10 @@ function getPlacementCoords(placement) {
   if (!placement) return null;
   if (typeof placement.x === 'number' || typeof placement.width === 'number') {
     return {
-      x: placement.x || 0, y: placement.y || 0,
-      width: placement.width || 0, height: placement.height || 0
+      x: typeof placement.x === 'number' ? placement.x : null,
+      y: typeof placement.y === 'number' ? placement.y : null,
+      width: typeof placement.width === 'number' ? placement.width : null,
+      height: typeof placement.height === 'number' ? placement.height : null
     };
   }
   return null;
@@ -261,13 +263,18 @@ async function parseInstructions(usageJson, tsxText) {
     var occ = occurrenceByName[name] || 0;
     occurrenceByName[name] = occ + 1;
 
-    var coords = getPlacementCoords(instr.placement)
-      || extractCoordinatesFromTsx(tsxText, name, occ);
+    var coords = getPlacementCoords(instr.placement);
+    if (!coords) {
+      var tsxCoords = extractCoordinatesFromTsx(tsxText, name, occ);
+      if (tsxCoords.found) coords = tsxCoords;
+    }
     var match = findInCatalog(catalog, instr);
 
-    // Derive a reasonable label from props if not provided
     var props = instr.props || {};
     var label = props.label || props.title || props.text || '';
+    var section = (instr.placement && instr.placement.section) || '';
+    var anchor = (instr.placement && instr.placement.anchor) || (/footer/i.test(section) ? 'bottom' : 'top');
+    var orderInSection = (instr.placement && instr.placement.orderInSection) || (occ + 1);
 
     return {
       component: name,
@@ -275,12 +282,14 @@ async function parseInstructions(usageJson, tsxText) {
       figmaNodeId: instr.figmaNodeId || null,
       figmaComponentSetId: instr.figmaComponentSetId || null,
       placement: {
-        x: (coords && coords.x) || 0,
-        y: (coords && coords.y) || 0,
-        width: (coords && coords.width) || 320,
-        height: (coords && coords.height) || 48
+        x: coords && coords.x != null ? coords.x : null,
+        y: coords && coords.y != null ? coords.y : null,
+        width: coords && coords.width != null ? coords.width : null,
+        height: coords && coords.height != null ? coords.height : null,
+        section: section,
+        anchor: anchor,
+        orderInSection: orderInSection
       },
-      placementMeta: (instr.placement && !getPlacementCoords(instr.placement)) ? instr.placement : null,
       props: Object.assign({}, props, label ? { label: label } : {}),
       libraryComponentKey: instr.libraryComponentKey || null,
       matchType: match.matchType,
