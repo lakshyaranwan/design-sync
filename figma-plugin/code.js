@@ -16,6 +16,7 @@ const KNOWN_MD_VERSIONS = ['1.0', '1.1', '1.2'];
 // ---------- State ----------
 let parsedManifest = null;
 let parsedInstructions = [];
+let parsedCustomInstructions = [];
 // ---------- UI ----------
 figma.showUI(__html__, { width: 880, height: 620 });
 function uiLog(line, color) {
@@ -26,17 +27,16 @@ function uiError(message) {
 }
 // ---------- Init: list frames & check libraries ----------
 async function sendInit() {
-    var _a, _b;
     const frames = figma.currentPage.children
         .filter((n) => n.type === 'FRAME')
         .map((n) => ({ id: n.id, name: n.name }));
     let librariesConnected = true;
     try {
-        const libs = await ((_b = (_a = figma.teamLibrary) === null || _a === void 0 ? void 0 : _a.getAvailableLibrariesAsync) === null || _b === void 0 ? void 0 : _b.call(_a));
+        const libs = await figma.teamLibrary?.getAvailableLibrariesAsync?.();
         if (libs && Array.isArray(libs))
             librariesConnected = libs.length > 0;
     }
-    catch (_c) {
+    catch {
         // Older API — assume connected, will surface during lookup
     }
     figma.ui.postMessage({ type: 'frames', payload: { frames, librariesConnected } });
@@ -109,15 +109,21 @@ function buildInstructions(manifest, hints) {
     const enriched = manifest.components.map((c, i) => {
         const queue = hintQueueByComponent[c.component];
         const hint = queue && queue.length ? queue.shift() : undefined;
-        if ((hint === null || hint === void 0 ? void 0 : hint.variant) && hint.variant !== c.variantPath) {
+        if (hint?.variant && hint.variant !== c.variantPath) {
             warnings.push(`Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`);
         }
-        if ((hint === null || hint === void 0 ? void 0 : hint.nodeId) && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
+        if (hint?.nodeId && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
             warnings.push(`Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`);
         }
-        return Object.assign(Object.assign({}, c), { 
+        return {
+            ...c,
             // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
-            variantPath: c.variantPath, figmaNodeId: c.figmaNodeId || (hint === null || hint === void 0 ? void 0 : hint.nodeId) || '', widthHint: hint === null || hint === void 0 ? void 0 : hint.widthHint, heightHint: hint === null || hint === void 0 ? void 0 : hint.heightHint, globalOrder: i });
+            variantPath: c.variantPath,
+            figmaNodeId: c.figmaNodeId || hint?.nodeId || '',
+            widthHint: hint?.widthHint,
+            heightHint: hint?.heightHint,
+            globalOrder: i,
+        };
     });
     // Stable sort: section-known-order, then orderInSection
     enriched.sort((a, b) => {
@@ -149,20 +155,18 @@ function matchesVariantProps(node, props) {
     return Object.keys(props).every((k) => vp[k] === props[k]);
 }
 function climbToComponentRoot(node) {
-    var _a;
     let cur = node;
     while (cur) {
         if (cur.type === 'COMPONENT' || cur.type === 'COMPONENT_SET') {
             return { type: cur.type, node: cur };
         }
-        cur = (_a = cur.parent) !== null && _a !== void 0 ? _a : null;
+        cur = cur.parent ?? null;
     }
     return null;
 }
 function pickVariantFromSet(set, entry, mode) {
-    var _a, _b, _c;
     const variantProps = parseVariantPath(entry.variantPath);
-    if (variantProps.Mode || ((_b = (_a = set.children[0]) === null || _a === void 0 ? void 0 : _a.variantProperties) === null || _b === void 0 ? void 0 : _b.Mode)) {
+    if (variantProps.Mode || set.children[0]?.variantProperties?.Mode) {
         variantProps.Mode = mode;
     }
     const exact = set.children.find((c) => matchesVariantProps(c, variantProps));
@@ -181,7 +185,7 @@ function pickVariantFromSet(set, entry, mode) {
         if (!best || score > best.score)
             best = { node: c, score };
     }
-    return (_c = best === null || best === void 0 ? void 0 : best.node) !== null && _c !== void 0 ? _c : null;
+    return best?.node ?? null;
 }
 async function resolveComponent(entry, mode) {
     // 1. Exact node ID — but if it points INSIDE a component (an inner layer),
@@ -192,7 +196,7 @@ async function resolveComponent(entry, mode) {
             const node = await figma.getNodeByIdAsync(entry.figmaNodeId);
             if (node) {
                 const root = climbToComponentRoot(node);
-                if ((root === null || root === void 0 ? void 0 : root.type) === 'COMPONENT') {
+                if (root?.type === 'COMPONENT') {
                     if (node.id !== root.node.id) {
                         uiLog(`    ↑ node is inside component "${root.node.name}" — using parent`, '#93c5fd');
                     }
@@ -204,7 +208,7 @@ async function resolveComponent(entry, mode) {
                     }
                     return { node: root.node, matchType: 'exact-id' };
                 }
-                if ((root === null || root === void 0 ? void 0 : root.type) === 'COMPONENT_SET') {
+                if (root?.type === 'COMPONENT_SET') {
                     const match = pickVariantFromSet(root.node, entry, mode);
                     if (match) {
                         uiLog(`    ↑ node is inside set "${root.node.name}" — picked variant "${match.name}"`, '#93c5fd');
@@ -213,7 +217,7 @@ async function resolveComponent(entry, mode) {
                 }
             }
         }
-        catch (_a) { }
+        catch { }
     }
     // 2. Component set + variant resolve
     if (entry.figmaComponentSetId) {
@@ -225,12 +229,12 @@ async function resolveComponent(entry, mode) {
                     return { node: match, matchType: 'set-variant' };
             }
         }
-        catch (_b) { }
+        catch { }
     }
     // 3. Remote library by name
     try {
         const tl = figma.teamLibrary;
-        if (tl === null || tl === void 0 ? void 0 : tl.getAvailableComponentsAsync) {
+        if (tl?.getAvailableComponentsAsync) {
             const available = await tl.getAvailableComponentsAsync();
             const want = entry.component.toLowerCase();
             const remote = available.find((c) => c.name.toLowerCase().includes(want));
@@ -240,7 +244,7 @@ async function resolveComponent(entry, mode) {
             }
         }
     }
-    catch (_c) { }
+    catch { }
     return { node: null, matchType: 'missing' };
 }
 // ---------- Helpers: apply props + text ----------
@@ -283,10 +287,9 @@ async function setTextContent(instance, label) {
 }
 // ---------- Placeholder ----------
 async function createMissingPlaceholder(instruction) {
-    var _a, _b;
     const f = figma.createFrame();
     f.name = `[MISSING] ${instruction.variantPath}`;
-    f.resize((_a = instruction.widthHint) !== null && _a !== void 0 ? _a : 320, (_b = instruction.heightHint) !== null && _b !== void 0 ? _b : 48);
+    f.resize(instruction.widthHint ?? 320, instruction.heightHint ?? 48);
     f.fills = [{ type: 'SOLID', color: { r: 1, g: 0.95, b: 0.95 } }];
     f.strokes = [{ type: 'SOLID', color: { r: 0.88, g: 0.2, b: 0.2 } }];
     f.strokeWeight = 1.5;
@@ -304,15 +307,14 @@ async function createMissingPlaceholder(instruction) {
         label.y = 8;
         f.appendChild(label);
     }
-    catch (_c) { }
+    catch { }
     return f;
 }
 // ---------- Build ----------
 async function buildScreen(manifest, instructions, targetFrame, options) {
-    var _a;
     // Split into multiple frames if height limit exceeded
     const MAX_HEIGHT = 10000;
-    const frame = targetFrame !== null && targetFrame !== void 0 ? targetFrame : figma.createFrame();
+    const frame = targetFrame ?? figma.createFrame();
     frame.name = manifest.screen || 'DS Mapped Screen';
     frame.resize(options.width, Math.min(options.height, MAX_HEIGHT));
     frame.layoutMode = 'VERTICAL';
@@ -362,7 +364,30 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
         uiLog(`  • ${instr.component} ${instr.variantPath}`);
         const { node, matchType } = await resolveComponent(instr, options.mode);
         if (node && sectionFrame) {
-            const instance = node.createInstance();
+            // Link to parent ComponentSet (so layers panel shows "Button", not
+            // "Button/Primary/Large"). Instantiate from the set's default variant
+            // and then apply the desired variant via setProperties.
+            let instance;
+            const parentSet = node.parent;
+            if (parentSet && parentSet.type === 'COMPONENT_SET') {
+                const set = parentSet;
+                const seed = set.defaultVariant ?? node;
+                instance = seed.createInstance();
+                const variantProps = parseVariantPath(instr.variantPath);
+                const sample = set.children[0]?.variantProperties;
+                if (sample && sample.Mode)
+                    variantProps['Mode'] = options.mode;
+                try {
+                    if (Object.keys(variantProps).length)
+                        instance.setProperties(variantProps);
+                }
+                catch (e) {
+                    uiLog(`    ! setProperties failed: ${e.message}`, '#fbbf24');
+                }
+            }
+            else {
+                instance = node.createInstance();
+            }
             applyProps(instance, instr.props, options.mode);
             if (instr.props && instr.props.label) {
                 await setTextContent(instance, String(instr.props.label));
@@ -379,7 +404,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             try {
                 instance.layoutSizingHorizontal = 'FILL';
             }
-            catch (_b) { }
+            catch { }
             if (matchType === 'exact-id' || matchType === 'set-variant') {
                 exactMatch++;
                 uiLog(`    ✓ ${matchType}`, '#86efac');
@@ -396,9 +421,20 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             try {
                 ph.layoutSizingHorizontal = 'FILL';
             }
-            catch (_c) { }
+            catch { }
             missing.push(instr.variantPath);
             uiLog(`    ✗ missing → placeholder`, '#fca5a5');
+        }
+    }
+    // ── PASS 2: Custom (non-DS) elements parsed from TSX ────────────
+    let customCount = 0;
+    if (options.customInstructions && options.customInstructions.length > 0) {
+        uiLog(`▸ rendering ${options.customInstructions.length} custom elements`, '#93c5fd');
+        try {
+            customCount = await buildCustomNodes(options.customInstructions, frame);
+        }
+        catch (e) {
+            uiLog(`! custom node pass failed: ${e.message}`, '#fca5a5');
         }
     }
     if (!targetFrame) {
@@ -407,7 +443,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
         figma.currentPage.appendChild(frame);
     }
     // Split if too tall
-    if (((_a = frame.height) !== null && _a !== void 0 ? _a : 0) > MAX_HEIGHT) {
+    if ((frame.height ?? 0) > MAX_HEIGHT) {
         uiLog(`! frame height ${Math.round(frame.height)} > ${MAX_HEIGHT}, splitting`, '#fbbf24');
         splitFrame(frame, MAX_HEIGHT);
     }
@@ -420,6 +456,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
         missing,
         approximate,
         mdVersion: manifest.designMdVersion || '',
+        customCount,
     };
 }
 function splitFrame(frame, maxHeight) {
@@ -451,7 +488,438 @@ function splitFrame(frame, maxHeight) {
         figma.currentPage.appendChild(next);
     }
 }
-// ---------- Re-sync / Audit / Reverse export ----------
+// ---------- Custom (non-DS) parser + builder ----------
+function parseFullTsx(tsxText) {
+    const hints = [];
+    const customInstructions = [];
+    const sectionMap = {};
+    const TOKEN_HEX = {
+        'color.light.primary.500': '#1c3fcaff',
+        'color.light.primary.50': '#f3f6fdff',
+        'color.shade.white': '#ffffffff',
+        'color.shade.black': '#030612ff',
+        'color.light.neutral.50': '#f5f6fbff',
+        'color.light.neutral.100': '#ecedf3ff',
+        'color.light.neutral.300': '#c8cad4ff',
+        'color.light.neutral.500': '#6b7280ff',
+        'color.light.neutral.900': '#111827ff',
+    };
+    function resolveColorValue(raw) {
+        const tokenMatch = raw.match(/tokens\[['"]([^'"]+)['"]\]/);
+        if (tokenMatch)
+            return TOKEN_HEX[tokenMatch[1]] ?? raw;
+        if (raw.startsWith('#'))
+            return raw;
+        if (raw.startsWith('rgb'))
+            return raw;
+        return raw;
+    }
+    function parseInlineStyles(styleStr) {
+        const styles = {};
+        const pairs = styleStr.matchAll(/(\w+):\s*([^,}]+)/g);
+        for (const match of pairs) {
+            const key = match[1];
+            const rawVal = match[2];
+            const val = String(rawVal).trim().replace(/['"]/g, '');
+            switch (key) {
+                case 'display':
+                    styles.display = val;
+                    break;
+                case 'flexDirection':
+                    styles.flexDirection = val;
+                    break;
+                case 'justifyContent':
+                    styles.justifyContent = val;
+                    break;
+                case 'alignItems':
+                    styles.alignItems = val;
+                    break;
+                case 'gap':
+                    styles.gap = parseFloat(val);
+                    break;
+                case 'paddingTop':
+                    styles.paddingTop = parseFloat(val);
+                    break;
+                case 'paddingBottom':
+                    styles.paddingBottom = parseFloat(val);
+                    break;
+                case 'paddingLeft':
+                    styles.paddingLeft = parseFloat(val);
+                    break;
+                case 'paddingRight':
+                    styles.paddingRight = parseFloat(val);
+                    break;
+                case 'padding': {
+                    const p = parseFloat(val);
+                    styles.paddingTop = styles.paddingBottom = styles.paddingLeft = styles.paddingRight = p;
+                    break;
+                }
+                case 'width':
+                    styles.width = val.includes('%') ? 'fill' : parseFloat(val);
+                    break;
+                case 'height':
+                    styles.height = val.includes('%') ? 'fill' : parseFloat(val);
+                    break;
+                case 'backgroundColor':
+                    styles.backgroundColor = resolveColorValue(String(rawVal).trim());
+                    break;
+                case 'color':
+                    styles.color = resolveColorValue(String(rawVal).trim());
+                    break;
+                case 'fontSize':
+                    styles.fontSize = parseFloat(val);
+                    break;
+                case 'fontWeight':
+                    styles.fontWeight = parseFloat(val);
+                    break;
+                case 'lineHeight':
+                    styles.lineHeight = parseFloat(val);
+                    break;
+                case 'borderRadius':
+                    styles.borderRadius = parseFloat(val);
+                    break;
+                case 'opacity':
+                    styles.opacity = parseFloat(val);
+                    break;
+                case 'position':
+                    styles.position = val;
+                    break;
+                case 'bottom':
+                    styles.bottom = parseFloat(val);
+                    break;
+                case 'boxShadow':
+                    styles.boxShadow = String(rawVal).trim();
+                    break;
+            }
+        }
+        return styles;
+    }
+    const lines = tsxText.split('\n');
+    let currentSection = 'Body';
+    let orderIndex = 0;
+    let depth = 0;
+    const depthStack = ['root'];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const sectionMatch = line.match(/\{\/\*\s*Section:\s*([A-Za-z0-9_-]+)\s*\*\/\}/);
+        if (sectionMatch) {
+            currentSection = sectionMatch[1];
+            continue;
+        }
+        if (line.includes('data-ds-component=')) {
+            const compM = line.match(/data-ds-component=["']([^"']+)["']/);
+            const variantM = line.match(/data-ds-variant=["']([^"']+)["']/);
+            const nodeIdM = line.match(/data-ds-node-id=["']([^"']+)["']/);
+            if (compM) {
+                const hint = { component: compM[1] };
+                if (variantM)
+                    hint.variant = variantM[1];
+                if (nodeIdM)
+                    hint.nodeId = nodeIdM[1];
+                hints.push(hint);
+            }
+            continue;
+        }
+        const openTagMatch = line.match(/^\s*<(div|section|main|header|footer|p|h[1-6]|span)\s/);
+        if (openTagMatch) {
+            const tag = openTagMatch[1];
+            const id = `node-${orderIndex.toString().padStart(3, '0')}`;
+            const parentId = depthStack[depthStack.length - 1] ?? 'root';
+            const styleMatch = line.match(/style=\{\{(.+?)(?:\}\}|$)/s);
+            let styleStr = styleMatch ? styleMatch[1] : '';
+            if (styleMatch && !line.includes('}}')) {
+                for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
+                    styleStr += ' ' + lines[j];
+                    if (lines[j].includes('}}')) {
+                        i = j;
+                        break;
+                    }
+                }
+            }
+            const styles = parseInlineStyles(styleStr);
+            let category = 'custom-frame';
+            let inferredType = 'frame';
+            if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span'].includes(tag)) {
+                const textMatch = (lines[i + 1] ?? '').match(/^\s*([^<{]+?)\s*$/);
+                if (textMatch) {
+                    category = 'custom-text';
+                    inferredType = 'text';
+                }
+            }
+            const prevLine = lines[i - 1] ?? '';
+            if (prevLine.includes('image:'))
+                inferredType = 'image-placeholder';
+            if (prevLine.includes('icon:'))
+                inferredType = 'icon-placeholder';
+            if (styles.height === 1 || (typeof styles.height === 'number' && styles.height <= 2)) {
+                inferredType = 'divider';
+            }
+            const instr = {
+                id,
+                category,
+                depth,
+                parentId,
+                tag,
+                inferredType,
+                sectionName: currentSection,
+                styles,
+                orderIndex: orderIndex++,
+            };
+            if (category === 'custom-text') {
+                const textLine = lines[i + 1]?.trim();
+                if (textLine && !textLine.startsWith('<')) {
+                    instr.textContent = textLine.replace(/[{}'"`]/g, '').trim();
+                }
+            }
+            customInstructions.push(instr);
+            depthStack.push(id);
+            depth++;
+        }
+        if (line.match(/^\s*<\/(div|section|main|header|footer|p|h[1-6]|span)>/)) {
+            if (depthStack.length > 1)
+                depthStack.pop();
+            depth = Math.max(0, depth - 1);
+        }
+    }
+    return { hints, customInstructions, sectionMap };
+}
+function hexToRgb(hex) {
+    const clean = hex.replace('#', '').replace(/ff$/i, '');
+    if (clean.length === 6) {
+        return {
+            r: parseInt(clean.slice(0, 2), 16) / 255,
+            g: parseInt(clean.slice(2, 4), 16) / 255,
+            b: parseInt(clean.slice(4, 6), 16) / 255,
+        };
+    }
+    const rgbMatch = hex.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    if (rgbMatch) {
+        return {
+            r: parseInt(rgbMatch[1]) / 255,
+            g: parseInt(rgbMatch[2]) / 255,
+            b: parseInt(rgbMatch[3]) / 255,
+        };
+    }
+    return null;
+}
+function parseBoxShadow(shadow) {
+    const m = shadow.match(/(-?\d+)px\s+(-?\d+)px\s+(\d+)px\s*(\d+)?px?\s*rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]+)?\)/);
+    if (!m)
+        return null;
+    return {
+        type: 'DROP_SHADOW',
+        offset: { x: parseInt(m[1]), y: parseInt(m[2]) },
+        radius: parseInt(m[3]),
+        spread: parseInt(m[4] ?? '0'),
+        color: {
+            r: parseInt(m[5]) / 255,
+            g: parseInt(m[6]) / 255,
+            b: parseInt(m[7]) / 255,
+            a: parseFloat(m[8] ?? '1'),
+        },
+        blendMode: 'NORMAL',
+        showShadowBehindNode: false,
+        visible: true,
+    };
+}
+function mapJustify(val) {
+    const map = {
+        'flex-start': 'MIN', 'start': 'MIN',
+        'center': 'CENTER',
+        'flex-end': 'MAX', 'end': 'MAX',
+        'space-between': 'SPACE_BETWEEN',
+    };
+    return map[val ?? 'flex-start'] ?? 'MIN';
+}
+function mapAlign(val) {
+    const map = {
+        'flex-start': 'MIN', 'start': 'MIN',
+        'center': 'CENTER',
+        'flex-end': 'MAX', 'end': 'MAX',
+    };
+    return map[val ?? 'flex-start'] ?? 'MIN';
+}
+function applyFrameSizing(frame, instr, parent) {
+    if (parent.layoutMode === 'NONE')
+        return;
+    if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
+        try {
+            frame.layoutSizingHorizontal = 'FILL';
+        }
+        catch { }
+    }
+    else if (typeof instr.styles.width === 'number') {
+        try {
+            frame.layoutSizingHorizontal = 'FIXED';
+        }
+        catch { }
+        frame.resize(instr.styles.width, frame.height || 1);
+    }
+    else {
+        try {
+            frame.layoutSizingHorizontal = 'HUG';
+        }
+        catch { }
+    }
+    if (typeof instr.styles.height === 'number') {
+        try {
+            frame.layoutSizingVertical = 'FIXED';
+        }
+        catch { }
+        frame.resize(frame.width || 1, instr.styles.height);
+    }
+    else {
+        try {
+            frame.layoutSizingVertical = 'HUG';
+        }
+        catch { }
+    }
+}
+function applyRectSizing(rect, instr, parent) {
+    if (parent.layoutMode === 'NONE')
+        return;
+    if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
+        try {
+            rect.layoutSizingHorizontal = 'FILL';
+        }
+        catch { }
+    }
+}
+async function buildCustomNodes(instructions, rootFrame) {
+    const nodeMap = new Map();
+    nodeMap.set('root', rootFrame);
+    let count = 0;
+    function getSectionFrame(sectionName) {
+        for (const child of rootFrame.children) {
+            if (child.name === sectionName && child.type === 'FRAME')
+                return child;
+        }
+        const sf = figma.createFrame();
+        sf.name = sectionName;
+        sf.layoutMode = 'VERTICAL';
+        sf.counterAxisSizingMode = 'FIXED';
+        sf.primaryAxisSizingMode = 'AUTO';
+        sf.fills = [];
+        rootFrame.appendChild(sf);
+        try {
+            sf.layoutSizingHorizontal = 'FILL';
+        }
+        catch { }
+        return sf;
+    }
+    for (const instr of instructions) {
+        const parentNode = nodeMap.get(instr.parentId ?? 'root') ??
+            getSectionFrame(instr.sectionName ?? 'Body');
+        let created = null;
+        try {
+            if (instr.category === 'custom-text') {
+                const t = figma.createText();
+                const weight = instr.styles.fontWeight ?? 400;
+                const style = weight >= 700 ? 'Bold' : weight >= 600 ? 'SemiBold' : weight >= 500 ? 'Medium' : 'Regular';
+                try {
+                    await figma.loadFontAsync({ family: 'Inter', style });
+                }
+                catch {
+                    await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
+                }
+                t.fontName = { family: 'Inter', style };
+                t.characters = instr.textContent ?? '';
+                if (instr.styles.fontSize)
+                    t.fontSize = instr.styles.fontSize;
+                if (instr.styles.lineHeight)
+                    t.lineHeight = { value: instr.styles.lineHeight, unit: 'PIXELS' };
+                if (instr.styles.color) {
+                    const col = hexToRgb(instr.styles.color);
+                    if (col)
+                        t.fills = [{ type: 'SOLID', color: col }];
+                }
+                t.setPluginData('ds-linked', 'false');
+                t.setPluginData('ds-custom-type', 'text');
+                parentNode.appendChild(t);
+                created = t;
+            }
+            else if (instr.inferredType === 'image-placeholder' ||
+                instr.inferredType === 'icon-placeholder' ||
+                instr.inferredType === 'divider') {
+                const r = figma.createRectangle();
+                r.name = instr.inferredType === 'divider'
+                    ? '[divider]'
+                    : `[${instr.inferredType}] ${instr.className ?? ''}`;
+                const w = typeof instr.styles.width === 'number' ? instr.styles.width : 40;
+                const h = typeof instr.styles.height === 'number' ? instr.styles.height : 40;
+                r.resize(Math.max(1, w), Math.max(1, h));
+                if (instr.styles.backgroundColor) {
+                    const col = hexToRgb(instr.styles.backgroundColor);
+                    if (col)
+                        r.fills = [{ type: 'SOLID', color: col }];
+                }
+                if (instr.styles.borderRadius)
+                    r.cornerRadius = instr.styles.borderRadius;
+                r.setPluginData('ds-linked', 'false');
+                r.setPluginData('ds-custom-type', instr.inferredType ?? 'rect');
+                parentNode.appendChild(r);
+                applyRectSizing(r, instr, parentNode);
+                created = r;
+            }
+            else {
+                const f = figma.createFrame();
+                f.name = instr.className ?? instr.tag ?? 'frame';
+                f.fills = [];
+                if (instr.styles.display === 'flex') {
+                    f.layoutMode = instr.styles.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
+                    f.primaryAxisSizingMode = 'AUTO';
+                    f.counterAxisSizingMode = 'AUTO';
+                    if (instr.styles.gap)
+                        f.itemSpacing = instr.styles.gap;
+                    if (instr.styles.paddingTop)
+                        f.paddingTop = instr.styles.paddingTop;
+                    if (instr.styles.paddingBottom)
+                        f.paddingBottom = instr.styles.paddingBottom;
+                    if (instr.styles.paddingLeft)
+                        f.paddingLeft = instr.styles.paddingLeft;
+                    if (instr.styles.paddingRight)
+                        f.paddingRight = instr.styles.paddingRight;
+                    f.primaryAxisAlignItems = mapJustify(instr.styles.justifyContent);
+                    f.counterAxisAlignItems = mapAlign(instr.styles.alignItems);
+                }
+                else {
+                    f.layoutMode = 'NONE';
+                }
+                if (instr.styles.backgroundColor) {
+                    const col = hexToRgb(instr.styles.backgroundColor);
+                    if (col)
+                        f.fills = [{ type: 'SOLID', color: col }];
+                }
+                if (instr.styles.borderRadius)
+                    f.cornerRadius = instr.styles.borderRadius;
+                if (instr.styles.opacity !== undefined)
+                    f.opacity = instr.styles.opacity;
+                if (instr.styles.boxShadow) {
+                    const shadow = parseBoxShadow(instr.styles.boxShadow);
+                    if (shadow)
+                        f.effects = [shadow];
+                }
+                if (instr.styles.position === 'sticky' || instr.styles.position === 'fixed') {
+                    f.name = '[sticky] ' + f.name;
+                    f.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
+                }
+                f.setPluginData('ds-linked', 'false');
+                f.setPluginData('ds-custom-type', 'frame');
+                parentNode.appendChild(f);
+                applyFrameSizing(f, instr, parentNode);
+                created = f;
+            }
+            if (created) {
+                nodeMap.set(instr.id, created);
+                count++;
+            }
+        }
+        catch (e) {
+            uiLog(`  ! custom node ${instr.tag} failed: ${e.message}`, '#fbbf24');
+        }
+    }
+    return count;
+}
 async function resyncSelection() {
     const sel = figma.currentPage.selection[0];
     if (!sel || sel.type !== 'FRAME') {
@@ -482,7 +950,7 @@ async function resyncSelection() {
                 child.swapComponent(node);
                 updated++;
             }
-            catch (_a) { }
+            catch { }
         }
     }
     uiLog(`re-synced ${updated} instance(s)`, '#86efac');
@@ -562,11 +1030,25 @@ figma.ui.onmessage = async (msg) => {
             if (manifest.designMdVersion && !KNOWN_MD_VERSIONS.includes(manifest.designMdVersion)) {
                 warnings.push(`This usage.json was generated from Design MD v${manifest.designMdVersion}. Current spec may differ — verify missing/approximate components.`);
             }
-            const { hints } = payload.jsxText ? parseJsxHints(payload.jsxText) : { hints: [] };
+            const parsedTsx = payload.jsxText
+                ? parseFullTsx(payload.jsxText)
+                : { hints: [], customInstructions: [] };
+            const { hints, customInstructions } = parsedTsx;
             const { instructions, warnings: w2 } = buildInstructions(manifest, hints);
             warnings.push(...w2);
             parsedManifest = manifest;
             parsedInstructions = instructions;
+            parsedCustomInstructions = customInstructions;
+            // Custom element grouping for UI preview
+            const customCounts = {};
+            for (const ci of customInstructions) {
+                const k = ci.inferredType ?? ci.category;
+                customCounts[k] = (customCounts[k] || 0) + 1;
+            }
+            const customGroups = Object.keys(customCounts).map((k) => ({
+                type: k,
+                count: customCounts[k],
+            }));
             // Build preview rows with quick (non-importing) match check
             const preview = [];
             const counts = {};
@@ -585,19 +1067,19 @@ figma.ui.onmessage = async (msg) => {
                         if (n && n.type === 'COMPONENT')
                             status = 'exact';
                     }
-                    catch (_a) { }
+                    catch { }
                 }
                 if (status === 'missing') {
                     try {
                         const tl = figma.teamLibrary;
-                        if (tl === null || tl === void 0 ? void 0 : tl.getAvailableComponentsAsync) {
+                        if (tl?.getAvailableComponentsAsync) {
                             const available = await tl.getAvailableComponentsAsync();
                             if (available.find((c) => c.name.toLowerCase().includes(inst.component.toLowerCase()))) {
                                 status = 'name';
                             }
                         }
                     }
-                    catch (_b) { }
+                    catch { }
                 }
                 preview.push({
                     component: inst.component,
@@ -609,7 +1091,12 @@ figma.ui.onmessage = async (msg) => {
             }
             figma.ui.postMessage({
                 type: 'parsed',
-                payload: { preview, warnings },
+                payload: {
+                    preview,
+                    warnings,
+                    customGroups,
+                    customCount: parsedCustomInstructions.length,
+                },
             });
             return;
         }
@@ -628,6 +1115,7 @@ figma.ui.onmessage = async (msg) => {
                 width: payload.width,
                 height: payload.height,
                 mode: payload.mode,
+                customInstructions: parsedCustomInstructions,
             });
             figma.ui.postMessage({ type: 'built', payload: report });
             uiLog(`done · ${report.exactMatch + report.nameMatch}/${report.total} placed`, '#86efac');

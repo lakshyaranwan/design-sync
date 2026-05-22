@@ -104,6 +104,21 @@
       <div id="missingNote" class="warn" style="display:none">
         Some components will be placed as dashed placeholder frames.
       </div>
+
+      <div id="custom-preview" style="display:none; margin-top:16px;">
+        <div style="font-size:11px; font-weight:600; color:var(--muted); margin-bottom:6px;">
+          CUSTOM ELEMENTS (will be created as native Figma nodes)
+        </div>
+        <table id="custom-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+          <tbody id="custom-tbody"></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -305,6 +320,22 @@
         `${missingCount} component(s) will be placed as a placeholder frame.`;
       $('buildBtn').disabled = false;
 
+      // Custom elements preview
+      const cwrap = $('custom-preview');
+      const ctbody = $('custom-tbody');
+      ctbody.innerHTML = '';
+      const groups = payload.customGroups || [];
+      if (groups.length) {
+        cwrap.style.display = '';
+        groups.forEach((g) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${g.type}</td><td>${g.count}</td>`;
+          ctbody.appendChild(tr);
+        });
+      } else {
+        cwrap.style.display = 'none';
+      }
+
       if (payload.warnings && payload.warnings.length) {
         const w = document.createElement('div');
         w.className = 'warn';
@@ -323,9 +354,9 @@
       const s = $('summary');
       s.style.display = '';
       s.innerHTML =
-        `<strong>Built:</strong> ${payload.exactMatch + payload.nameMatch} components · ` +
-        `<strong>Missing:</strong> ${payload.missing.length} · ` +
-        `<strong>Approx:</strong> ${payload.approximate.length}`;
+        `<strong>DS linked:</strong> ${payload.exactMatch + payload.nameMatch} · ` +
+        `<strong>DS missing:</strong> ${payload.missing.length} · ` +
+        `<strong>Custom nodes:</strong> ${payload.customCount ?? 0}`;
     }
 
     if (type === 'error') {
