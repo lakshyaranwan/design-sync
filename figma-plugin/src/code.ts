@@ -1217,23 +1217,6 @@ figma.ui.onmessage = async (msg) => {
 
       figma.ui.postMessage({
         type: 'parsed',
-        payload: { preview, warnings },
-      });
-      return;
-    }
-
-    if (type === 'build') {
-      if (!parsedManifest || !parsedInstructions.length) {
-        uiError('Parse a usage.json first.');
-        return;
-      }
-      let target: FrameNode | null = null;
-      if (payload.targetFrameId && payload.targetFrameId !== '__new__') {
-        const n = await figma.getNodeByIdAsync(payload.targetFrameId);
-        if (n && n.type === 'FRAME') target = n as FrameNode;
-      }
-      figma.ui.postMessage({
-        type: 'parsed',
         payload: {
           preview,
           warnings,
