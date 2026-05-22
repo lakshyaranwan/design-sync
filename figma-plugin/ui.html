@@ -72,7 +72,7 @@
     <h2>1. Import</h2>
 
     <div class="field">
-      <label>Screen JSX (.jsx) — required</label>
+      <label>Screen JSX (.jsx/.tsx) — optional (used as coordinate fallback)</label>
       <input type="file" id="jsxFile" accept=".jsx,.tsx,.txt" />
     </div>
 
@@ -81,10 +81,16 @@
       <input type="file" id="usageFile" accept=".json" />
     </div>
 
+    <div class="field">
+      <label>Screen Screenshot (PNG/JPG) — required for build</label>
+      <input type="file" id="screenshot-input" accept="image/png,image/jpeg" />
+    </div>
+
     <div class="row">
-      <button class="primary" id="parseBtn" disabled>Parse</button>
+      <button class="primary" id="parseBtn" disabled>Parse files</button>
       <span id="parseStatus" style="color: var(--muted)"></span>
     </div>
+
 
     <div id="parseErrors"></div>
 
