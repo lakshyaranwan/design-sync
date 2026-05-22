@@ -662,12 +662,11 @@ figma.ui.onmessage = async (msg) => {
             const tl = (figma as any).teamLibrary;
             if (tl && tl.getAvailableComponentsAsync) {
               const available = await tl.getAvailableComponentsAsync();
-              if (
-                available.find((c: any) =>
-                  c.name.toLowerCase().indexOf(inst.component.toLowerCase()) !== -1,
-                )
-              ) {
-                status = 'name';
+              const name = inst.component.toLowerCase();
+              for (let i = 0; i < available.length; i++) {
+                if (available[i].name.charAt(0) === '.') continue;
+                const baseName = available[i].name.toLowerCase().split('/')[0].trim();
+                if (baseName === name) { status = 'name'; break; }
               }
             }
           } catch {}
