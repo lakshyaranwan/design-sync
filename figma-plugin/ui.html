@@ -1,112 +1,172 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 12px; margin: 0; padding: 12px; color: #111; }
-  h2 { font-size: 13px; margin: 12px 0 6px; }
-  h3 { font-size: 12px; margin: 10px 0 4px; color: #333; }
-  button { padding: 6px 12px; font-size: 12px; cursor: pointer; margin-right: 6px; }
-  .status { color: #666; font-style: italic; margin: 8px 0; }
-  .lib { background: #f5f5f5; padding: 8px; border-radius: 4px; margin: 6px 0; }
-  .lib-name { font-weight: 600; }
-  .count { color: #666; font-size: 11px; }
-  ul { margin: 4px 0 8px 16px; padding: 0; max-height: 160px; overflow: auto; }
-  li { margin: 2px 0; font-size: 11px; }
-  .err { color: #b00; background: #fee; padding: 6px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
-  .note { color: #5c3d00; background: #fff7d6; padding: 6px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
-  .empty { color: #999; font-style: italic; }
-  .meta { color: #666; font-size: 10px; margin-left: 4px; }
+  body { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 12px; color: #222; }
+  h2 { font-size: 13px; margin: 16px 0 6px; }
+  h3 { font-size: 12px; margin: 12px 0 4px; color: #444; }
+  .row { display: flex; gap: 6px; margin: 4px 0; }
+  input[type=text], input[type=password] { flex: 1; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; }
+  button { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; font: inherit; }
+  button.primary { background: #18a0fb; color: #fff; border-color: #18a0fb; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .status { font-size: 11px; color: #666; margin: 6px 0; min-height: 14px; }
+  .card { border: 1px solid #eee; border-radius: 4px; padding: 8px; margin: 4px 0; }
+  .muted { color: #888; font-size: 11px; }
+  .pill { display: inline-block; padding: 1px 6px; background: #f0f0f0; border-radius: 8px; font-size: 10px; margin-right: 4px; }
+  .err { color: #c33; font-size: 11px; }
+  details { margin: 4px 0; }
+  summary { cursor: pointer; font-weight: 500; }
+  .scroll { max-height: 240px; overflow: auto; border: 1px solid #eee; border-radius: 4px; padding: 6px; }
+  .item { padding: 3px 0; border-bottom: 1px solid #f5f5f5; }
+  .item:last-child { border-bottom: none; }
 </style>
 </head>
 <body>
-  <div>
-    <button id="scan">Rescan</button>
-    <button id="close">Close</button>
-  </div>
-  <div id="status" class="status">Initializing...</div>
-  <div id="errors"></div>
-  <div id="output"></div>
+
+<h2>Design Library Source</h2>
+<div class="row">
+  <input type="text" id="libraryUrl" placeholder="Paste Figma library file URL (figma.com/file/...)" />
+</div>
+<div class="row">
+  <input type="password" id="token" placeholder="Personal access token (saved locally)" />
+  <button id="saveBtn">Save</button>
+</div>
+<div class="row">
+  <button id="fetchBtn" class="primary">Fetch full catalog</button>
+  <button id="clearBtn">Clear saved</button>
+</div>
+<div class="muted">Token scopes needed: <code>file_content:read</code>, <code>library_assets:read</code>. Get one at figma.com/settings.</div>
+
+<div class="status" id="status"></div>
+
+<h2>Library Catalog <span class="muted" id="catalogMeta"></span></h2>
+<div id="catalog"><div class="muted">Not fetched yet.</div></div>
+
+<h2>Attached to This File</h2>
+<div class="row"><button id="rescanBtn">Rescan attached</button></div>
+<div id="attached"></div>
 
 <script>
-const $ = function (id) { return document.getElementById(id); };
+var state = { hasToken: false, libraryUrl: '', catalog: null, attached: null };
 
-$('scan').onclick = function () { parent.postMessage({ pluginMessage: { type: 'scan' } }, '*'); };
-$('close').onclick = function () { parent.postMessage({ pluginMessage: { type: 'close' } }, '*'); };
+function $(id) { return document.getElementById(id); }
+function send(type, extra) { parent.postMessage({ pluginMessage: Object.assign({ type: type }, extra || {}) }, '*'); }
 
-function esc(s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) { return ({'&':'&amp;','<':'&lt;','>':'&gt;'})[c]; }); }
+function renderCatalog() {
+  var el = $('catalog');
+  var meta = $('catalogMeta');
+  if (!state.catalog) { el.innerHTML = '<div class="muted">Not fetched yet.</div>'; meta.textContent = ''; return; }
+  var c = state.catalog;
+  meta.textContent = '— ' + c.fileName + ' · fetched ' + new Date(c.fetchedAt).toLocaleString();
 
-function render(data) {
-  const out = $('output');
-  const errs = $('errors');
-  errs.innerHTML = '';
-  (data.notes || []).forEach(function (e) {
-    const d = document.createElement('div');
-    d.className = 'note';
-    d.textContent = e;
-    errs.appendChild(d);
-  });
-  (data.errors || []).forEach(function (e) {
-    const d = document.createElement('div');
-    d.className = 'err';
-    d.textContent = e;
-    errs.appendChild(d);
+  var stylesByType = {};
+  c.styles.forEach(function (s) {
+    var t = s.styleType || 'OTHER';
+    if (!stylesByType[t]) stylesByType[t] = [];
+    stylesByType[t].push(s);
   });
 
-  const libNames = Object.keys(data.librariesByName || {}).sort();
-  let html = '';
-  if (libNames.length === 0) {
-    html += '<div class="empty">No library token collections detected. Make sure libraries are enabled in Assets &rarr; Libraries.</div>';
-  } else {
-    html += '<h2>Attached Libraries (' + libNames.length + ')</h2>';
-  }
-  libNames.forEach(function (lib) {
-    const stats = data.librariesByName[lib];
-    const vcs = (data.variableCollections || []).filter(function (v) { return v.libraryName === lib; });
-    const comps = (data.components || []).filter(function (c) { return c.libraryName === lib; });
+  var html = '';
+  html += '<div class="card"><span class="pill">' + c.components.length + ' components</span>';
+  html += '<span class="pill">' + c.componentSets.length + ' sets</span>';
+  html += '<span class="pill">' + c.styles.length + ' styles</span></div>';
 
-    html += '<div class="lib">';
-    html += '<div class="lib-name">' + esc(lib) + '</div>';
-    html += '<div class="count">' + stats.variableCollections + ' variable collections, ' + stats.components + ' components</div>';
-
-    if (vcs.length) {
-      html += '<h3>Variable Collections</h3><ul>';
-      vcs.forEach(function (v) { html += '<li>' + esc(v.name) + '</li>'; });
-      html += '</ul>';
-    }
-    if (comps.length) {
-      html += '<h3>Components</h3><ul>';
-      comps.forEach(function (c) { html += '<li>' + esc(c.name) + '</li>'; });
-      html += '</ul>';
-    }
-    html += '</div>';
+  html += '<details open><summary>Component Sets (' + c.componentSets.length + ')</summary><div class="scroll">';
+  c.componentSets.forEach(function (s) {
+    html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
+    if (s.description) html += ' <span class="muted">— ' + escapeHtml(s.description) + '</span>';
+    html += '<div class="muted">key: ' + s.key + '</div></div>';
   });
+  html += '</div></details>';
 
-  const used = data.usedComponents || [];
-  html += '<h2>Components Used In This File (' + used.length + ')</h2>';
-  if (!used.length) {
-    html += '<div class="empty">No component instances found on the canvas.</div>';
-  } else {
-    html += '<ul>';
-    used.forEach(function (c) {
-      html += '<li><strong>' + esc(c.name) + '</strong>';
-      html += '<span class="meta">' + c.instanceCount + ' instance' + (c.instanceCount === 1 ? '' : 's');
-      html += c.remote ? ' · remote library' : ' · local';
-      if (c.pages && c.pages.length) html += ' · ' + esc(c.pages.join(', '));
-      html += '</span>';
-      if (c.variants && c.variants.length) html += '<br><span class="meta">Variants: ' + esc(c.variants.slice(0, 8).join(', ')) + (c.variants.length > 8 ? '…' : '') + '</span>';
-      html += '</li>';
+  html += '<details><summary>Components (' + c.components.length + ')</summary><div class="scroll">';
+  c.components.forEach(function (comp) {
+    html += '<div class="item"><strong>' + escapeHtml(comp.name) + '</strong>';
+    if (comp.componentSetId) html += ' <span class="pill">variant</span>';
+    html += '<div class="muted">key: ' + comp.key + '</div></div>';
+  });
+  html += '</div></details>';
+
+  Object.keys(stylesByType).sort().forEach(function (t) {
+    var arr = stylesByType[t];
+    html += '<details><summary>' + t + ' styles (' + arr.length + ')</summary><div class="scroll">';
+    arr.forEach(function (s) {
+      html += '<div class="item"><strong>' + escapeHtml(s.name) + '</strong>';
+      html += '<div class="muted">key: ' + s.key + '</div></div>';
     });
-    html += '</ul>';
-  }
-  out.innerHTML = html;
+    html += '</div></details>';
+  });
+
+  el.innerHTML = html;
 }
 
+function renderAttached() {
+  var el = $('attached');
+  if (!state.attached) { el.innerHTML = ''; return; }
+  var a = state.attached;
+  var html = '';
+  if (a.errors && a.errors.length) {
+    a.errors.forEach(function (e) { html += '<div class="err">' + escapeHtml(e) + '</div>'; });
+  }
+  html += '<details open><summary>Variable collections (' + a.variableCollections.length + ')</summary><div class="scroll">';
+  a.variableCollections.forEach(function (v) {
+    html += '<div class="item"><strong>' + escapeHtml(v.name) + '</strong> <span class="muted">— ' + escapeHtml(v.libraryName) + '</span></div>';
+  });
+  html += '</div></details>';
+  html += '<details><summary>Components used in this file (' + a.usedComponents.length + ')</summary><div class="scroll">';
+  a.usedComponents.forEach(function (u) {
+    html += '<div class="item"><strong>' + escapeHtml(u.name) + '</strong> <span class="pill">' + u.instanceCount + ' uses</span>';
+    if (u.variants.length) html += ' <span class="muted">' + u.variants.length + ' variants</span>';
+    html += '</div>';
+  });
+  html += '</div></details>';
+  el.innerHTML = html;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+$('saveBtn').onclick = function () {
+  send('save-config', { token: $('token').value.trim(), libraryUrl: $('libraryUrl').value.trim() });
+};
+$('fetchBtn').onclick = function () {
+  send('fetch-catalog', { libraryUrl: $('libraryUrl').value.trim() });
+};
+$('clearBtn').onclick = function () { send('clear-config'); };
+$('rescanBtn').onclick = function () { send('rescan-attached'); };
+
 window.onmessage = function (event) {
-  const msg = event.data.pluginMessage;
+  var msg = event.data.pluginMessage;
   if (!msg) return;
-  if (msg.type === 'status') { $('status').textContent = msg.message; }
-  else if (msg.type === 'libraries') { render(msg.data); }
+  if (msg.type === 'status') { $('status').textContent = msg.message || ''; }
+  else if (msg.type === 'init') {
+    state.hasToken = msg.hasToken;
+    state.libraryUrl = msg.libraryUrl || '';
+    state.catalog = msg.catalog || null;
+    state.attached = msg.attached || null;
+    $('libraryUrl').value = state.libraryUrl;
+    $('token').placeholder = state.hasToken ? 'Token saved (enter new to replace)' : 'Personal access token (saved locally)';
+    renderCatalog();
+    renderAttached();
+  }
+  else if (msg.type === 'config-saved') {
+    state.hasToken = msg.hasToken;
+    $('token').value = '';
+    $('token').placeholder = msg.hasToken ? 'Token saved (enter new to replace)' : 'Personal access token (saved locally)';
+  }
+  else if (msg.type === 'catalog') {
+    state.catalog = msg.catalog;
+    renderCatalog();
+  }
+  else if (msg.type === 'attached') {
+    state.attached = msg.attached;
+    renderAttached();
+  }
 };
 </script>
 </body>

@@ -9,6 +9,7 @@
   "editorType": ["figma"],
   "ui": "ui.html",
   "networkAccess": {
-    "allowedDomains": ["none"]
+    "allowedDomains": ["https://api.figma.com"],
+    "reasoning": "Fetch the full design system catalog (components, component sets, styles) from a Figma library file via the Figma REST API."
   }
 }
