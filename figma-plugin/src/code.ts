@@ -90,8 +90,8 @@ async function sendInit() {
   let librariesConnected = true;
   try {
     const tl = (figma as any).teamLibrary;
-    if (tl && tl.getAvailableLibraryComponentsAsync) {
-      const available = await tl.getAvailableLibraryComponentsAsync();
+    if (tl && tl.getAvailableComponentsAsync) {
+      const available = await tl.getAvailableComponentsAsync();
       uiLog('Library components found: ' + (available ? available.length : 0));
     } else {
       uiLog('teamLibrary enumeration API unavailable — will rely on importComponentByKeyAsync.');
@@ -300,8 +300,8 @@ async function resolveComponent(
   // 2. External library — importComponentByKeyAsync
   try {
     const tl = (figma as any).teamLibrary;
-    if (tl && tl.getAvailableLibraryComponentsAsync) {
-      const available = await tl.getAvailableLibraryComponentsAsync();
+    if (tl && tl.getAvailableComponentsAsync) {
+      const available = await tl.getAvailableComponentsAsync();
 
       // Strategy A: match by figmaComponentSetId embedded in key
       if (entry.figmaComponentSetId) {
@@ -664,8 +664,8 @@ figma.ui.onmessage = async (msg) => {
         if (status === 'missing') {
           try {
             const tl = (figma as any).teamLibrary;
-            if (tl && tl.getAvailableLibraryComponentsAsync) {
-              const available = await tl.getAvailableLibraryComponentsAsync();
+            if (tl && tl.getAvailableComponentsAsync) {
+              const available = await tl.getAvailableComponentsAsync();
               const name = inst.component.toLowerCase();
               for (let i = 0; i < available.length; i++) {
                 if (available[i].name.charAt(0) === '.') continue;
