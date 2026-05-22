@@ -1,5 +1,4 @@
-// Sen Money DS Mapper — main thread
-// Compiled with `tsc` to ./code.js (referenced by manifest.json)
+// Sen Money DS Mapper — main thread (screenshot + overlay approach)
 
 // ---------- Types ----------
 interface ComponentEntry {
@@ -17,6 +16,10 @@ interface ComponentEntry {
     section: string;
     semanticRole: string;
     orderInSection: number;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
   };
   accessibility: {
     role: string;
@@ -54,70 +57,19 @@ interface BuildReport {
   nameMatch: number;
   missing: string[];
   approximate: string[];
-  mdVersion: string;
+  mdVersion?: string;
   customCount?: number;
 }
 
-// Known section ordering for SM screens — falls back to first-seen order
-const SECTION_ORDER = [
-  'Header',
-  'AccountSummary',
-  'TransferForm',
-  'RecipientDetails',
-  'Body',
-  'Content',
-  'StickyFooter',
-];
-
-// Known designMdVersions this plugin understands
 const KNOWN_MD_VERSIONS = ['1.0', '1.1', '1.2'];
-
-// ---------- Custom (non-DS) element types ----------
-type CustomNodeCategory = 'custom-frame' | 'custom-text' | 'custom-rect';
-
-interface CustomRenderInstruction {
-  id: string;
-  category: CustomNodeCategory;
-  depth: number;
-  parentId: string | null;
-  tag: string;
-  className?: string;
-  textContent?: string;
-  inferredType?: 'frame' | 'text' | 'rect' | 'image-placeholder' | 'icon-placeholder' | 'divider';
-  sectionName?: string;
-  styles: {
-    display?: string;
-    flexDirection?: string;
-    justifyContent?: string;
-    alignItems?: string;
-    gap?: number;
-    paddingTop?: number;
-    paddingBottom?: number;
-    paddingLeft?: number;
-    paddingRight?: number;
-    width?: number | string;
-    height?: number | string;
-    backgroundColor?: string;
-    color?: string;
-    fontSize?: number;
-    fontWeight?: number;
-    lineHeight?: number;
-    borderRadius?: number;
-    opacity?: number;
-    position?: string;
-    bottom?: number;
-    boxShadow?: string;
-  };
-  orderIndex: number;
-}
 
 // ---------- State ----------
 let parsedManifest: UsageManifest | null = null;
 let parsedInstructions: PlacementInstruction[] = [];
-let parsedCustomInstructions: CustomRenderInstruction[] = [];
+let parsedJsxText: string = '';
 
 // ---------- UI ----------
-figma.showUI(__html__, { width: 880, height: 620 });
+figma.showUI(__html__, { width: 880, height: 640 });
 
 function uiLog(line: string, color?: string) {
   figma.ui.postMessage({ type: 'log', payload: { line, color } });
@@ -126,7 +78,7 @@ function uiError(message: string) {
   figma.ui.postMessage({ type: 'error', payload: { message } });
 }
 
-// ---------- Init: list frames & check libraries ----------
+// ---------- Init ----------
 async function sendInit() {
   const frames = figma.currentPage.children
     .filter((n) => n.type === 'FRAME')
@@ -136,9 +88,7 @@ async function sendInit() {
   try {
     const libs = await (figma as any).teamLibrary?.getAvailableLibrariesAsync?.();
     if (libs && Array.isArray(libs)) librariesConnected = libs.length > 0;
-  } catch {
-    // Older API — assume connected, will surface during lookup
-  }
+  } catch {}
 
   figma.ui.postMessage({ type: 'frames', payload: { frames, librariesConnected } });
 }
@@ -166,43 +116,48 @@ interface JsxHint {
   component?: string;
   variant?: string;
   nodeId?: string;
-  section?: string;
-  widthHint?: number;
-  heightHint?: number;
 }
 
-function parseJsxHints(text: string): { hints: JsxHint[]; sections: string[] } {
+function parseJsxHints(text: string): JsxHint[] {
   const hints: JsxHint[] = [];
-  const sections: string[] = [];
-
-  // Section comments: // Section: X   or  {/* Section: X */}  or {/* X */}
-  const sectionRegex = /(?:\/\/\s*Section:\s*([A-Za-z0-9_-]+))|(?:\{\s*\/\*\s*(?:Section:\s*)?([A-Za-z0-9_-]+)\s*\*\/\s*\})/g;
-  let m: RegExpExecArray | null;
-  while ((m = sectionRegex.exec(text)) !== null) {
-    const s = m[1] || m[2];
-    if (s) sections.push(s);
-  }
-
-  // Scan element-by-element: find data-ds-component attrs and pull sibling attrs in same tag
   const tagRegex = /<[A-Za-z][^>]*data-ds-component=["']([^"']+)["'][^>]*>/g;
+  let m: RegExpExecArray | null;
   while ((m = tagRegex.exec(text)) !== null) {
     const tag = m[0];
     const grab = (re: RegExp) => {
       const x = re.exec(tag);
       return x ? x[1] : undefined;
     };
-    const widthStr = grab(/width\s*:\s*['"]?(\d+)/);
-    const heightStr = grab(/height\s*:\s*['"]?(\d+)/);
     hints.push({
       component: m[1],
       variant: grab(/data-ds-variant=["']([^"']+)["']/),
       nodeId: grab(/data-ds-node-id=["']([^"']+)["']/),
-      widthHint: widthStr ? Number(widthStr) : undefined,
-      heightHint: heightStr ? Number(heightStr) : undefined,
     });
   }
+  return hints;
+}
 
-  return { hints, sections };
+// Fallback: read x/y/width/height for a DS component from the TSX file
+function extractCoordinatesFromTsx(
+  tsxText: string,
+  componentName: string,
+): { x: number; y: number; width: number; height: number } {
+  const lines = tsxText.split('\n');
+  const coords = { x: 0, y: 0, width: 320, height: 48 };
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf('data-ds-component="' + componentName + '"') === -1) continue;
+    const block = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 5)).join(' ');
+    const left = block.match(/left[:\s]+(\d+)/);
+    const top = block.match(/top[:\s]+(\d+)/);
+    const w = block.match(/width[:\s]+(\d+)/);
+    const h = block.match(/height[:\s]+(\d+)/);
+    if (left) coords.x = parseInt(left[1], 10);
+    if (top) coords.y = parseInt(top[1], 10);
+    if (w) coords.width = parseInt(w[1], 10);
+    if (h) coords.height = parseInt(h[1], 10);
+    break;
+  }
+  return coords;
 }
 
 function buildInstructions(
@@ -210,54 +165,28 @@ function buildInstructions(
   hints: JsxHint[],
 ): { instructions: PlacementInstruction[]; warnings: string[] } {
   const warnings: string[] = [];
-
-  // Merge JSX hints by component+order (best-effort by index sequence within component)
   const hintQueueByComponent: Record<string, JsxHint[]> = {};
   for (const h of hints) {
     if (!h.component) continue;
-    (hintQueueByComponent[h.component] ||= []).push(h);
+    (hintQueueByComponent[h.component] = hintQueueByComponent[h.component] || []).push(h);
   }
 
-  // Contract: usage.json is the SINGLE SOURCE OF TRUTH for variantPath and
-  // figmaNodeId. JSX data-ds-* attributes are diagnostic only — when they
-  // disagree, that indicates an upstream generator bug (the JSX and manifest
-  // were produced inconsistently). We surface the mismatch but DO NOT override.
   const enriched: PlacementInstruction[] = manifest.components.map((c, i) => {
     const queue = hintQueueByComponent[c.component];
     const hint = queue && queue.length ? queue.shift() : undefined;
 
-    if (hint?.variant && hint.variant !== c.variantPath) {
+    if (hint && hint.variant && hint.variant !== c.variantPath) {
       warnings.push(
-        `Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`,
-      );
-    }
-    if (hint?.nodeId && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
-      warnings.push(
-        `Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`,
+        `Mismatch for ${c.component}: JSX="${hint.variant}" vs usage.json="${c.variantPath}". Using usage.json.`,
       );
     }
 
-    return {
-      ...c,
-      // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
+    return Object.assign({}, c, {
       variantPath: c.variantPath,
-      figmaNodeId: c.figmaNodeId || hint?.nodeId || '',
-      widthHint: hint?.widthHint,
-      heightHint: hint?.heightHint,
+      figmaNodeId: c.figmaNodeId || (hint && hint.nodeId) || '',
       globalOrder: i,
-    };
+    }) as PlacementInstruction;
   });
-
-  // Stable sort: section-known-order, then orderInSection
-  enriched.sort((a, b) => {
-    const sa = SECTION_ORDER.indexOf(a.placement.section);
-    const sb = SECTION_ORDER.indexOf(b.placement.section);
-    const ai = sa === -1 ? 999 + a.globalOrder : sa;
-    const bi = sb === -1 ? 999 + b.globalOrder : sb;
-    if (ai !== bi) return ai - bi;
-    return a.placement.orderInSection - b.placement.orderInSection;
-  });
-  enriched.forEach((e, i) => (e.globalOrder = i));
 
   return { instructions: enriched, warnings };
 }
@@ -275,10 +204,7 @@ function parseVariantPath(path: string): Record<string, string> {
   return result;
 }
 
-function matchesVariantProps(
-  node: ComponentNode,
-  props: Record<string, string>,
-): boolean {
+function matchesVariantProps(node: ComponentNode, props: Record<string, string>): boolean {
   const vp = (node as any).variantProperties as Record<string, string> | null;
   if (!vp) return false;
   return Object.keys(props).every((k) => vp[k] === props[k]);
@@ -292,7 +218,7 @@ function climbToComponentRoot(
     if (cur.type === 'COMPONENT' || cur.type === 'COMPONENT_SET') {
       return { type: cur.type, node: cur };
     }
-    cur = (cur as any).parent ?? null;
+    cur = (cur as any).parent || null;
   }
   return null;
 }
@@ -303,14 +229,14 @@ function pickVariantFromSet(
   mode: 'Light' | 'Dark',
 ): ComponentNode | null {
   const variantProps = parseVariantPath(entry.variantPath);
-  if (variantProps.Mode || (set.children[0] as any)?.variantProperties?.Mode) {
+  const sample = set.children[0] && (set.children[0] as any).variantProperties;
+  if (variantProps.Mode || (sample && sample.Mode)) {
     variantProps.Mode = mode;
   }
   const exact = (set.children as ComponentNode[]).find((c) =>
     matchesVariantProps(c, variantProps),
   );
   if (exact) return exact;
-  // Partial match: highest overlap of variant keys
   let best: { node: ComponentNode; score: number } | null = null;
   for (const c of set.children as ComponentNode[]) {
     const vp = (c as any).variantProperties as Record<string, string> | null;
@@ -319,28 +245,19 @@ function pickVariantFromSet(
     for (const k of Object.keys(variantProps)) if (vp[k] === variantProps[k]) score++;
     if (!best || score > best.score) best = { node: c, score };
   }
-  return best?.node ?? null;
+  return best ? best.node : null;
 }
 
 async function resolveComponent(
   entry: PlacementInstruction,
   mode: 'Light' | 'Dark',
 ): Promise<{ node: ComponentNode | null; matchType: MatchType }> {
-  // 1. Exact node ID — but if it points INSIDE a component (an inner layer),
-  // climb up to the enclosing COMPONENT / COMPONENT_SET so we instantiate the
-  // top-level component, not a nested frame/text/instance.
   if (entry.figmaNodeId) {
     try {
       const node = await figma.getNodeByIdAsync(entry.figmaNodeId);
       if (node) {
         const root = climbToComponentRoot(node);
-        if (root?.type === 'COMPONENT') {
-          if (node.id !== root.node.id) {
-            uiLog(
-              `    ↑ node is inside component "${root.node.name}" — using parent`,
-              '#93c5fd',
-            );
-          }
+        if (root && root.type === 'COMPONENT') {
           const parent = (root.node as ComponentNode).parent;
           if (parent && parent.type === 'COMPONENT_SET') {
             const match = pickVariantFromSet(parent as ComponentSetNode, entry, mode);
@@ -348,21 +265,14 @@ async function resolveComponent(
           }
           return { node: root.node as ComponentNode, matchType: 'exact-id' };
         }
-        if (root?.type === 'COMPONENT_SET') {
+        if (root && root.type === 'COMPONENT_SET') {
           const match = pickVariantFromSet(root.node as ComponentSetNode, entry, mode);
-          if (match) {
-            uiLog(
-              `    ↑ node is inside set "${root.node.name}" — picked variant "${match.name}"`,
-              '#93c5fd',
-            );
-            return { node: match, matchType: 'set-variant' };
-          }
+          if (match) return { node: match, matchType: 'set-variant' };
         }
       }
     } catch {}
   }
 
-  // 2. Component set + variant resolve
   if (entry.figmaComponentSetId) {
     try {
       const set = await figma.getNodeByIdAsync(entry.figmaComponentSetId);
@@ -373,14 +283,12 @@ async function resolveComponent(
     } catch {}
   }
 
-
-  // 3. Remote library by name
   try {
     const tl = (figma as any).teamLibrary;
-    if (tl?.getAvailableComponentsAsync) {
+    if (tl && tl.getAvailableComponentsAsync) {
       const available = await tl.getAvailableComponentsAsync();
       const want = entry.component.toLowerCase();
-      const remote = available.find((c: any) => c.name.toLowerCase().includes(want));
+      const remote = available.find((c: any) => c.name.toLowerCase().indexOf(want) !== -1);
       if (remote) {
         const imported = await figma.importComponentByKeyAsync(remote.key);
         return { node: imported, matchType: 'name-match' };
@@ -391,35 +299,7 @@ async function resolveComponent(
   return { node: null, matchType: 'missing' };
 }
 
-// ---------- Helpers: apply props + text ----------
-const VARIANT_PROP_MAP: Record<string, string> = {
-  style: 'Style',
-  size: 'Size',
-  mode: 'Mode',
-  state: 'State',
-  icon: 'Icon',
-};
-
-function applyProps(
-  instance: InstanceNode,
-  props: Record<string, any>,
-  mode: 'Light' | 'Dark',
-) {
-  const overrides: Record<string, string> = {};
-  for (const k of Object.keys(props)) {
-    const figmaKey = VARIANT_PROP_MAP[k.toLowerCase()];
-    if (figmaKey) overrides[figmaKey] = String(props[k]);
-  }
-  overrides['Mode'] = mode;
-  try {
-    if (Object.keys(overrides).length > 0) {
-      (instance as any).setProperties(overrides);
-    }
-  } catch (e) {
-    uiLog(`  ! could not apply variant props: ${(e as Error).message}`, '#fbbf24');
-  }
-}
-
+// ---------- Helpers ----------
 async function setTextContent(instance: InstanceNode, label: string) {
   const textNodes = instance.findAll((n) => n.type === 'TEXT') as TextNode[];
   if (textNodes.length === 0) return;
@@ -432,116 +312,68 @@ async function setTextContent(instance: InstanceNode, label: string) {
   }
 }
 
-// ---------- Placeholder ----------
-async function createMissingPlaceholder(
-  instruction: PlacementInstruction,
-): Promise<FrameNode> {
-  const f = figma.createFrame();
-  f.name = `[MISSING] ${instruction.variantPath}`;
-  f.resize(instruction.widthHint ?? 320, instruction.heightHint ?? 48);
-  f.fills = [{ type: 'SOLID', color: { r: 1, g: 0.95, b: 0.95 } }];
-  f.strokes = [{ type: 'SOLID', color: { r: 0.88, g: 0.2, b: 0.2 } }];
-  f.strokeWeight = 1.5;
-  f.dashPattern = [4, 4];
-  f.setPluginData('ds-missing', instruction.component);
-  f.setPluginData('ds-missing-variant', instruction.variantPath);
-
-  try {
-    await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-    const label = figma.createText();
-    label.fontName = { family: 'Inter', style: 'Regular' };
-    label.characters = `${instruction.component} · ${instruction.variantPath}`;
-    label.fontSize = 11;
-    label.fills = [{ type: 'SOLID', color: { r: 0.7, g: 0.1, b: 0.1 } }];
-    label.x = 8;
-    label.y = 8;
-    f.appendChild(label);
-  } catch {}
-
-  return f;
-}
-
-// ---------- Build ----------
+// ---------- Build (screenshot + overlay) ----------
 async function buildScreen(
   manifest: UsageManifest,
   instructions: PlacementInstruction[],
-  targetFrame: FrameNode | null,
-  options: {
-    width: number;
-    height: number;
-    mode: 'Light' | 'Dark';
-    customInstructions?: CustomRenderInstruction[];
-  },
+  screenshotBytes: Uint8Array,
+  options: { width: number; height: number; mode: 'Light' | 'Dark' },
 ): Promise<BuildReport> {
-  // Split into multiple frames if height limit exceeded
-  const MAX_HEIGHT = 10000;
-
-  const frame = targetFrame ?? figma.createFrame();
+  // 1. Root frame at screenshot dimensions, absolute positioning
+  const frame = figma.createFrame();
   frame.name = manifest.screen || 'DS Mapped Screen';
-  frame.resize(options.width, Math.min(options.height, MAX_HEIGHT));
-  frame.layoutMode = 'VERTICAL';
-  frame.counterAxisSizingMode = 'FIXED';
-  frame.primaryAxisSizingMode = 'AUTO';
-  frame.itemSpacing = 0;
-  frame.paddingTop = 0;
-  frame.paddingBottom = 0;
-  frame.paddingLeft = 0;
-  frame.paddingRight = 0;
-  frame.fills = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  frame.resize(options.width, options.height);
+  frame.layoutMode = 'NONE';
+  frame.clipsContent = true;
 
-  let currentSection = '';
-  let sectionFrame: FrameNode | null = null;
+  // 2. Place screenshot as image fill
+  try {
+    const imageHash = figma.createImage(screenshotBytes).hash;
+    frame.fills = [{ type: 'IMAGE', imageHash, scaleMode: 'FILL' }];
+  } catch (e) {
+    uiLog(`! screenshot fill failed: ${(e as Error).message}`, '#fca5a5');
+  }
 
+  // 3. Position on canvas
+  frame.x = figma.viewport.center.x - options.width / 2;
+  frame.y = figma.viewport.center.y - options.height / 2;
+  figma.currentPage.appendChild(frame);
+
+  // 4. Overlay each DS component
   let exactMatch = 0;
   let nameMatch = 0;
   const missing: string[] = [];
   const approximate: string[] = [];
 
   for (const instr of instructions) {
-    if (instr.placement.section !== currentSection) {
-      currentSection = instr.placement.section;
-      sectionFrame = figma.createFrame();
-      sectionFrame.name = currentSection;
-      // Set auto-layout BEFORE appending children so FILL works on descendants.
-      sectionFrame.layoutMode = 'VERTICAL';
-      sectionFrame.counterAxisSizingMode = 'FIXED';
-      sectionFrame.primaryAxisSizingMode = 'AUTO';
-      sectionFrame.fills = [];
-      if (currentSection === 'StickyFooter') {
-        sectionFrame.paddingTop = 20;
-        sectionFrame.paddingBottom = 20;
-        sectionFrame.paddingLeft = 20;
-        sectionFrame.paddingRight = 20;
-        sectionFrame.itemSpacing = 20;
-      }
-      // Parent must be appended into its auto-layout container BEFORE we set
-      // layoutSizingHorizontal — that property is only valid on children of
-      // an auto-layout frame.
-      frame.appendChild(sectionFrame);
-      try {
-        sectionFrame.layoutSizingHorizontal = 'FILL';
-      } catch (e) {
-        uiLog(`  ! section FILL failed: ${(e as Error).message}`, '#fbbf24');
-      }
-      uiLog(`▸ section: ${currentSection}`, '#93c5fd');
-    }
-
     uiLog(`  • ${instr.component} ${instr.variantPath}`);
 
-    const { node, matchType } = await resolveComponent(instr, options.mode);
+    // Coords: prefer usage.json placement, fall back to TSX extraction
+    let coords = {
+      x: typeof instr.placement.x === 'number' ? instr.placement.x : 0,
+      y: typeof instr.placement.y === 'number' ? instr.placement.y : 0,
+      width: typeof instr.placement.width === 'number' ? instr.placement.width : 0,
+      height: typeof instr.placement.height === 'number' ? instr.placement.height : 0,
+    };
+    if (!coords.width || !coords.height) {
+      const fallback = extractCoordinatesFromTsx(parsedJsxText, instr.component);
+      if (!coords.width) coords.width = fallback.width;
+      if (!coords.height) coords.height = fallback.height;
+      if (!coords.x) coords.x = fallback.x;
+      if (!coords.y) coords.y = fallback.y;
+    }
 
-    if (node && sectionFrame) {
-      // Link to parent ComponentSet (so layers panel shows "Button", not
-      // "Button/Primary/Large"). Instantiate from the set's default variant
-      // and then apply the desired variant via setProperties.
+    const resolved = await resolveComponent(instr, options.mode);
+
+    if (resolved.node) {
       let instance: InstanceNode;
-      const parentSet = node.parent;
+      const parentSet = resolved.node.parent;
       if (parentSet && parentSet.type === 'COMPONENT_SET') {
         const set = parentSet as ComponentSetNode;
-        const seed = set.defaultVariant ?? node;
+        const seed = set.defaultVariant || resolved.node;
         instance = seed.createInstance();
         const variantProps = parseVariantPath(instr.variantPath);
-        const sample = (set.children[0] as any)?.variantProperties as Record<string, string> | undefined;
+        const sample = set.children[0] && (set.children[0] as any).variantProperties;
         if (sample && sample.Mode) variantProps['Mode'] = options.mode;
         try {
           if (Object.keys(variantProps).length) (instance as any).setProperties(variantProps);
@@ -549,68 +381,49 @@ async function buildScreen(
           uiLog(`    ! setProperties failed: ${(e as Error).message}`, '#fbbf24');
         }
       } else {
-        instance = node.createInstance();
+        instance = resolved.node.createInstance();
       }
 
-      applyProps(instance, instr.props, options.mode);
       if (instr.props && instr.props.label) {
         await setTextContent(instance, String(instr.props.label));
       }
 
+      frame.appendChild(instance);
+      instance.x = coords.x;
+      instance.y = coords.y;
+      try {
+        instance.resize(coords.width, coords.height);
+      } catch {}
+
       instance.setPluginData('ds-component', instr.component);
       instance.setPluginData('ds-variant', instr.variantPath);
       instance.setPluginData('ds-node-id', instr.figmaNodeId || '');
-      instance.setPluginData('ds-section', instr.placement.section);
-      instance.setPluginData('ds-order', String(instr.globalOrder));
-      instance.setPluginData('ds-match-type', matchType);
-      instance.setPluginData('ds-md-version', manifest.designMdVersion || '');
+      instance.setPluginData('ds-linked', 'true');
+      instance.setPluginData('ds-match-type', resolved.matchType);
 
-      // Append FIRST, then set layoutSizingHorizontal (requires auto-layout parent).
-      sectionFrame.appendChild(instance);
-      try {
-        instance.layoutSizingHorizontal = 'FILL';
-      } catch {}
-
-      if (matchType === 'exact-id' || matchType === 'set-variant') {
+      if (resolved.matchType === 'exact-id' || resolved.matchType === 'set-variant') {
         exactMatch++;
-        uiLog(`    ✓ ${matchType}`, '#86efac');
-      } else if (matchType === 'name-match') {
+        uiLog(`    ✓ placed at ${coords.x},${coords.y}`, '#86efac');
+      } else {
         nameMatch++;
         approximate.push(instr.variantPath);
-        uiLog(`    ~ name-match`, '#fbbf24');
+        uiLog(`    ~ name-match at ${coords.x},${coords.y}`, '#fbbf24');
       }
-    } else if (sectionFrame) {
-      const ph = await createMissingPlaceholder(instr);
-      sectionFrame.appendChild(ph);
-      try {
-        ph.layoutSizingHorizontal = 'FILL';
-      } catch {}
+    } else {
+      const ph = figma.createFrame();
+      ph.name = `[MISSING] ${instr.component}`;
+      ph.resize(Math.max(1, coords.width), Math.max(1, coords.height));
+      frame.appendChild(ph);
+      ph.x = coords.x;
+      ph.y = coords.y;
+      ph.fills = [{ type: 'SOLID', color: { r: 1, g: 0.9, b: 0.9 }, opacity: 0.7 }];
+      ph.strokes = [{ type: 'SOLID', color: { r: 0.88, g: 0.2, b: 0.2 } }];
+      ph.strokeWeight = 1;
+      ph.setPluginData('ds-missing', instr.component);
+      ph.setPluginData('ds-missing-variant', instr.variantPath);
       missing.push(instr.variantPath);
-      uiLog(`    ✗ missing → placeholder`, '#fca5a5');
+      uiLog(`    ✗ missing placeholder at ${coords.x},${coords.y}`, '#fca5a5');
     }
-  }
-
-  // ── PASS 2: Custom (non-DS) elements parsed from TSX ────────────
-  let customCount = 0;
-  if (options.customInstructions && options.customInstructions.length > 0) {
-    uiLog(`▸ rendering ${options.customInstructions.length} custom elements`, '#93c5fd');
-    try {
-      customCount = await buildCustomNodes(options.customInstructions, frame);
-    } catch (e) {
-      uiLog(`! custom node pass failed: ${(e as Error).message}`, '#fca5a5');
-    }
-  }
-
-  if (!targetFrame) {
-    frame.x = figma.viewport.center.x - options.width / 2;
-    frame.y = figma.viewport.center.y - options.height / 2;
-    figma.currentPage.appendChild(frame);
-  }
-
-  // Split if too tall
-  if ((frame.height ?? 0) > MAX_HEIGHT) {
-    uiLog(`! frame height ${Math.round(frame.height)} > ${MAX_HEIGHT}, splitting`, '#fbbf24');
-    splitFrame(frame, MAX_HEIGHT);
   }
 
   return {
@@ -622,415 +435,11 @@ async function buildScreen(
     missing,
     approximate,
     mdVersion: manifest.designMdVersion || '',
-    customCount,
+    customCount: 0,
   };
 }
 
-function splitFrame(frame: FrameNode, maxHeight: number) {
-  // Best-effort: clone overflowing children into _part2, _part3 frames
-  let part = 2;
-  let yAccum = 0;
-  let overflowChildren: SceneNode[] = [];
-  for (const child of [...frame.children]) {
-    yAccum += (child as any).height || 0;
-    if (yAccum > maxHeight) overflowChildren.push(child);
-  }
-  while (overflowChildren.length) {
-    const next = frame.clone();
-    next.name = frame.name + `_part${part++}`;
-    // Remove all children, then re-append overflow batch
-    for (const c of [...next.children]) c.remove();
-    let h = 0;
-    const taken: SceneNode[] = [];
-    while (overflowChildren.length && h < maxHeight) {
-      const c = overflowChildren.shift()!;
-      h += (c as any).height || 0;
-      next.appendChild(c);
-      taken.push(c);
-    }
-    next.x = frame.x + frame.width + 80 * (part - 2);
-    next.y = frame.y;
-    figma.currentPage.appendChild(next);
-  }
-}
-
-// ---------- Custom (non-DS) parser + builder ----------
-function parseFullTsx(tsxText: string): {
-  hints: JsxHint[];
-  customInstructions: CustomRenderInstruction[];
-  sectionMap: Record<string, string>;
-} {
-  const hints: JsxHint[] = [];
-  const customInstructions: CustomRenderInstruction[] = [];
-  const sectionMap: Record<string, string> = {};
-
-  const TOKEN_HEX: Record<string, string> = {
-    'color.light.primary.500': '#1c3fcaff',
-    'color.light.primary.50': '#f3f6fdff',
-    'color.shade.white': '#ffffffff',
-    'color.shade.black': '#030612ff',
-    'color.light.neutral.50': '#f5f6fbff',
-    'color.light.neutral.100': '#ecedf3ff',
-    'color.light.neutral.300': '#c8cad4ff',
-    'color.light.neutral.500': '#6b7280ff',
-    'color.light.neutral.900': '#111827ff',
-  };
-
-  function resolveColorValue(raw: string): string {
-    const tokenMatch = raw.match(/tokens\[['"]([^'"]+)['"]\]/);
-    if (tokenMatch) return TOKEN_HEX[tokenMatch[1]] ?? raw;
-    if (raw.startsWith('#')) return raw;
-    if (raw.startsWith('rgb')) return raw;
-    return raw;
-  }
-
-  function parseInlineStyles(styleStr: string): CustomRenderInstruction['styles'] {
-    const styles: CustomRenderInstruction['styles'] = {};
-    const pairs = styleStr.matchAll(/(\w+):\s*([^,}]+)/g);
-    for (const match of pairs as any) {
-      const key = match[1];
-      const rawVal = match[2];
-      const val = String(rawVal).trim().replace(/['"]/g, '');
-      switch (key) {
-        case 'display': styles.display = val; break;
-        case 'flexDirection': styles.flexDirection = val; break;
-        case 'justifyContent': styles.justifyContent = val; break;
-        case 'alignItems': styles.alignItems = val; break;
-        case 'gap': styles.gap = parseFloat(val); break;
-        case 'paddingTop': styles.paddingTop = parseFloat(val); break;
-        case 'paddingBottom': styles.paddingBottom = parseFloat(val); break;
-        case 'paddingLeft': styles.paddingLeft = parseFloat(val); break;
-        case 'paddingRight': styles.paddingRight = parseFloat(val); break;
-        case 'padding': {
-          const p = parseFloat(val);
-          styles.paddingTop = styles.paddingBottom = styles.paddingLeft = styles.paddingRight = p;
-          break;
-        }
-        case 'width': styles.width = val.includes('%') ? 'fill' : parseFloat(val); break;
-        case 'height': styles.height = val.includes('%') ? 'fill' : parseFloat(val); break;
-        case 'backgroundColor': styles.backgroundColor = resolveColorValue(String(rawVal).trim()); break;
-        case 'color': styles.color = resolveColorValue(String(rawVal).trim()); break;
-        case 'fontSize': styles.fontSize = parseFloat(val); break;
-        case 'fontWeight': styles.fontWeight = parseFloat(val); break;
-        case 'lineHeight': styles.lineHeight = parseFloat(val); break;
-        case 'borderRadius': styles.borderRadius = parseFloat(val); break;
-        case 'opacity': styles.opacity = parseFloat(val); break;
-        case 'position': styles.position = val; break;
-        case 'bottom': styles.bottom = parseFloat(val); break;
-        case 'boxShadow': styles.boxShadow = String(rawVal).trim(); break;
-      }
-    }
-    return styles;
-  }
-
-  const lines = tsxText.split('\n');
-  let currentSection = 'Body';
-  let orderIndex = 0;
-  let depth = 0;
-  const depthStack: string[] = ['root'];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-
-    const sectionMatch = line.match(/\{\/\*\s*Section:\s*([A-Za-z0-9_-]+)\s*\*\/\}/);
-    if (sectionMatch) {
-      currentSection = sectionMatch[1];
-      continue;
-    }
-
-    if (line.includes('data-ds-component=')) {
-      const compM = line.match(/data-ds-component=["']([^"']+)["']/);
-      const variantM = line.match(/data-ds-variant=["']([^"']+)["']/);
-      const nodeIdM = line.match(/data-ds-node-id=["']([^"']+)["']/);
-      if (compM) {
-        const hint: JsxHint = { component: compM[1] };
-        if (variantM) hint.variant = variantM[1];
-        if (nodeIdM) hint.nodeId = nodeIdM[1];
-        hints.push(hint);
-      }
-      continue;
-    }
-
-    const openTagMatch = line.match(/^\s*<(div|section|main|header|footer|p|h[1-6]|span)\s/);
-    if (openTagMatch) {
-      const tag = openTagMatch[1];
-      const id = `node-${orderIndex.toString().padStart(3, '0')}`;
-      const parentId = depthStack[depthStack.length - 1] ?? 'root';
-
-      const styleMatch = line.match(/style=\{\{([\s\S]+?)(?:\}\}|$)/);
-      let styleStr = styleMatch ? styleMatch[1] : '';
-      if (styleMatch && !line.includes('}}')) {
-        for (let j = i + 1; j < Math.min(i + 10, lines.length); j++) {
-          styleStr += ' ' + lines[j];
-          if (lines[j].includes('}}')) { i = j; break; }
-        }
-      }
-
-      const styles = parseInlineStyles(styleStr);
-
-      let category: CustomNodeCategory = 'custom-frame';
-      let inferredType: CustomRenderInstruction['inferredType'] = 'frame';
-
-      if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span'].includes(tag)) {
-        const textMatch = (lines[i + 1] ?? '').match(/^\s*([^<{]+?)\s*$/);
-        if (textMatch) {
-          category = 'custom-text';
-          inferredType = 'text';
-        }
-      }
-
-      const prevLine = lines[i - 1] ?? '';
-      if (prevLine.includes('image:')) inferredType = 'image-placeholder';
-      if (prevLine.includes('icon:')) inferredType = 'icon-placeholder';
-      if (styles.height === 1 || (typeof styles.height === 'number' && styles.height <= 2)) {
-        inferredType = 'divider';
-      }
-
-      const instr: CustomRenderInstruction = {
-        id,
-        category,
-        depth,
-        parentId,
-        tag,
-        inferredType,
-        sectionName: currentSection,
-        styles,
-        orderIndex: orderIndex++,
-      };
-
-      if (category === 'custom-text') {
-        const textLine = lines[i + 1]?.trim();
-        if (textLine && !textLine.startsWith('<')) {
-          instr.textContent = textLine.replace(/[{}'"`]/g, '').trim();
-        }
-      }
-
-      customInstructions.push(instr);
-      depthStack.push(id);
-      depth++;
-    }
-
-    if (line.match(/^\s*<\/(div|section|main|header|footer|p|h[1-6]|span)>/)) {
-      if (depthStack.length > 1) depthStack.pop();
-      depth = Math.max(0, depth - 1);
-    }
-  }
-
-  return { hints, customInstructions, sectionMap };
-}
-
-function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
-  const clean = hex.replace('#', '').replace(/ff$/i, '');
-  if (clean.length === 6) {
-    return {
-      r: parseInt(clean.slice(0, 2), 16) / 255,
-      g: parseInt(clean.slice(2, 4), 16) / 255,
-      b: parseInt(clean.slice(4, 6), 16) / 255,
-    };
-  }
-  const rgbMatch = hex.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
-  if (rgbMatch) {
-    return {
-      r: parseInt(rgbMatch[1]) / 255,
-      g: parseInt(rgbMatch[2]) / 255,
-      b: parseInt(rgbMatch[3]) / 255,
-    };
-  }
-  return null;
-}
-
-function parseBoxShadow(shadow: string): Effect | null {
-  const m = shadow.match(/(-?\d+)px\s+(-?\d+)px\s+(\d+)px\s*(\d+)?px?\s*rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]+)?\)/);
-  if (!m) return null;
-  return {
-    type: 'DROP_SHADOW',
-    offset: { x: parseInt(m[1]), y: parseInt(m[2]) },
-    radius: parseInt(m[3]),
-    spread: parseInt(m[4] ?? '0'),
-    color: {
-      r: parseInt(m[5]) / 255,
-      g: parseInt(m[6]) / 255,
-      b: parseInt(m[7]) / 255,
-      a: parseFloat(m[8] ?? '1'),
-    },
-    blendMode: 'NORMAL',
-    showShadowBehindNode: false,
-    visible: true,
-  };
-}
-
-function mapJustify(val?: string): FrameNode['primaryAxisAlignItems'] {
-  const map: Record<string, FrameNode['primaryAxisAlignItems']> = {
-    'flex-start': 'MIN', 'start': 'MIN',
-    'center': 'CENTER',
-    'flex-end': 'MAX', 'end': 'MAX',
-    'space-between': 'SPACE_BETWEEN',
-  };
-  return map[val ?? 'flex-start'] ?? 'MIN';
-}
-
-function mapAlign(val?: string): FrameNode['counterAxisAlignItems'] {
-  const map: Record<string, FrameNode['counterAxisAlignItems']> = {
-    'flex-start': 'MIN', 'start': 'MIN',
-    'center': 'CENTER',
-    'flex-end': 'MAX', 'end': 'MAX',
-  };
-  return map[val ?? 'flex-start'] ?? 'MIN';
-}
-
-function applyFrameSizing(frame: FrameNode, instr: CustomRenderInstruction, parent: FrameNode) {
-  if (parent.layoutMode === 'NONE') return;
-  if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
-    try { frame.layoutSizingHorizontal = 'FILL'; } catch {}
-  } else if (typeof instr.styles.width === 'number') {
-    try { frame.layoutSizingHorizontal = 'FIXED'; } catch {}
-    frame.resize(instr.styles.width, frame.height || 1);
-  } else {
-    try { frame.layoutSizingHorizontal = 'HUG'; } catch {}
-  }
-  if (typeof instr.styles.height === 'number') {
-    try { frame.layoutSizingVertical = 'FIXED'; } catch {}
-    frame.resize(frame.width || 1, instr.styles.height);
-  } else {
-    try { frame.layoutSizingVertical = 'HUG'; } catch {}
-  }
-}
-
-function applyRectSizing(rect: RectangleNode, instr: CustomRenderInstruction, parent: FrameNode) {
-  if (parent.layoutMode === 'NONE') return;
-  if (instr.styles.width === 'fill' || instr.styles.width === '100%') {
-    try { (rect as any).layoutSizingHorizontal = 'FILL'; } catch {}
-  }
-}
-
-async function buildCustomNodes(
-  instructions: CustomRenderInstruction[],
-  rootFrame: FrameNode,
-): Promise<number> {
-  const nodeMap = new Map<string, FrameNode | TextNode | RectangleNode>();
-  nodeMap.set('root', rootFrame as any);
-  let count = 0;
-
-  function getSectionFrame(sectionName: string): FrameNode {
-    for (const child of rootFrame.children) {
-      if (child.name === sectionName && child.type === 'FRAME') return child as FrameNode;
-    }
-    const sf = figma.createFrame();
-    sf.name = sectionName;
-    sf.layoutMode = 'VERTICAL';
-    sf.counterAxisSizingMode = 'FIXED';
-    sf.primaryAxisSizingMode = 'AUTO';
-    sf.fills = [];
-    rootFrame.appendChild(sf);
-    try { sf.layoutSizingHorizontal = 'FILL'; } catch {}
-    return sf;
-  }
-
-  for (const instr of instructions) {
-    const parentNode =
-      (nodeMap.get(instr.parentId ?? 'root') as FrameNode | undefined) ??
-      getSectionFrame(instr.sectionName ?? 'Body');
-
-    let created: FrameNode | TextNode | RectangleNode | null = null;
-
-    try {
-      if (instr.category === 'custom-text') {
-        const t = figma.createText();
-        const weight = instr.styles.fontWeight ?? 400;
-        const style = weight >= 700 ? 'Bold' : weight >= 600 ? 'SemiBold' : weight >= 500 ? 'Medium' : 'Regular';
-        try { await figma.loadFontAsync({ family: 'Inter', style }); } catch {
-          await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
-        }
-        t.fontName = { family: 'Inter', style };
-        t.characters = instr.textContent ?? '';
-        if (instr.styles.fontSize) t.fontSize = instr.styles.fontSize;
-        if (instr.styles.lineHeight) t.lineHeight = { value: instr.styles.lineHeight, unit: 'PIXELS' };
-        if (instr.styles.color) {
-          const col = hexToRgb(instr.styles.color);
-          if (col) t.fills = [{ type: 'SOLID', color: col }];
-        }
-        t.setPluginData('ds-linked', 'false');
-        t.setPluginData('ds-custom-type', 'text');
-        parentNode.appendChild(t);
-        created = t;
-      } else if (
-        instr.inferredType === 'image-placeholder' ||
-        instr.inferredType === 'icon-placeholder' ||
-        instr.inferredType === 'divider'
-      ) {
-        const r = figma.createRectangle();
-        r.name = instr.inferredType === 'divider'
-          ? '[divider]'
-          : `[${instr.inferredType}] ${instr.className ?? ''}`;
-        const w = typeof instr.styles.width === 'number' ? instr.styles.width : 40;
-        const h = typeof instr.styles.height === 'number' ? instr.styles.height : 40;
-        r.resize(Math.max(1, w), Math.max(1, h));
-        if (instr.styles.backgroundColor) {
-          const col = hexToRgb(instr.styles.backgroundColor);
-          if (col) r.fills = [{ type: 'SOLID', color: col }];
-        }
-        if (instr.styles.borderRadius) r.cornerRadius = instr.styles.borderRadius;
-        r.setPluginData('ds-linked', 'false');
-        r.setPluginData('ds-custom-type', instr.inferredType ?? 'rect');
-        parentNode.appendChild(r);
-        applyRectSizing(r, instr, parentNode);
-        created = r;
-      } else {
-        const f = figma.createFrame();
-        f.name = instr.className ?? instr.tag ?? 'frame';
-        f.fills = [];
-
-        if (instr.styles.display === 'flex') {
-          f.layoutMode = instr.styles.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
-          f.primaryAxisSizingMode = 'AUTO';
-          f.counterAxisSizingMode = 'AUTO';
-          if (instr.styles.gap) f.itemSpacing = instr.styles.gap;
-          if (instr.styles.paddingTop) f.paddingTop = instr.styles.paddingTop;
-          if (instr.styles.paddingBottom) f.paddingBottom = instr.styles.paddingBottom;
-          if (instr.styles.paddingLeft) f.paddingLeft = instr.styles.paddingLeft;
-          if (instr.styles.paddingRight) f.paddingRight = instr.styles.paddingRight;
-          f.primaryAxisAlignItems = mapJustify(instr.styles.justifyContent);
-          f.counterAxisAlignItems = mapAlign(instr.styles.alignItems);
-        } else {
-          f.layoutMode = 'NONE';
-        }
-
-        if (instr.styles.backgroundColor) {
-          const col = hexToRgb(instr.styles.backgroundColor);
-          if (col) f.fills = [{ type: 'SOLID', color: col }];
-        }
-        if (instr.styles.borderRadius) f.cornerRadius = instr.styles.borderRadius;
-        if (instr.styles.opacity !== undefined) f.opacity = instr.styles.opacity;
-        if (instr.styles.boxShadow) {
-          const shadow = parseBoxShadow(instr.styles.boxShadow);
-          if (shadow) f.effects = [shadow];
-        }
-        if (instr.styles.position === 'sticky' || instr.styles.position === 'fixed') {
-          f.name = '[sticky] ' + f.name;
-          f.constraints = { horizontal: 'STRETCH', vertical: 'MAX' };
-        }
-
-        f.setPluginData('ds-linked', 'false');
-        f.setPluginData('ds-custom-type', 'frame');
-
-        parentNode.appendChild(f);
-        applyFrameSizing(f, instr, parentNode);
-        created = f;
-      }
-
-      if (created) {
-        nodeMap.set(instr.id, created);
-        count++;
-      }
-    } catch (e) {
-      uiLog(`  ! custom node ${instr.tag} failed: ${(e as Error).message}`, '#fbbf24');
-    }
-  }
-
-  return count;
-}
-
-
+// ---------- Resync / Audit / Reverse ----------
 async function resyncSelection() {
   const sel = figma.currentPage.selection[0];
   if (!sel || sel.type !== 'FRAME') {
@@ -1052,7 +461,7 @@ async function resyncSelection() {
       figmaComponentSetId: '',
       props: {},
       tokens: {},
-      placement: { section: child.getPluginData('ds-section'), semanticRole: '', orderInSection: 0 },
+      placement: { section: '', semanticRole: '', orderInSection: 0 },
       accessibility: { role: '' },
       globalOrder: 0,
     } as PlacementInstruction;
@@ -1081,7 +490,6 @@ function auditSelection() {
       component: n.getPluginData('ds-component') || n.getPluginData('ds-missing'),
       variantPath: n.getPluginData('ds-variant') || n.getPluginData('ds-missing-variant'),
       matchType: n.getPluginData('ds-match-type') || 'missing',
-      mdVersion: n.getPluginData('ds-md-version'),
     }));
   uiLog('AUDIT REPORT:');
   uiLog(JSON.stringify(items, null, 2));
@@ -1103,9 +511,13 @@ function reverseExport() {
       props: {},
       tokens: {},
       placement: {
-        section: n.getPluginData('ds-section') || 'Body',
+        section: 'Body',
         semanticRole: '',
-        orderInSection: Number(n.getPluginData('ds-order')) || i,
+        orderInSection: i,
+        x: Math.round((n as any).x || 0),
+        y: Math.round((n as any).y || 0),
+        width: Math.round((n as any).width || 0),
+        height: Math.round((n as any).height || 0),
       },
       accessibility: { role: '' },
     }));
@@ -1143,60 +555,45 @@ figma.ui.onmessage = async (msg) => {
       }
 
       const warnings: string[] = [];
-      if (manifest.designMdVersion && !KNOWN_MD_VERSIONS.includes(manifest.designMdVersion)) {
+      if (manifest.designMdVersion && KNOWN_MD_VERSIONS.indexOf(manifest.designMdVersion) === -1) {
         warnings.push(
-          `This usage.json was generated from Design MD v${manifest.designMdVersion}. Current spec may differ — verify missing/approximate components.`,
+          `usage.json designMdVersion=${manifest.designMdVersion} not in known set — proceed with caution.`,
         );
       }
 
-      const parsedTsx = payload.jsxText
-        ? parseFullTsx(payload.jsxText)
-        : { hints: [], customInstructions: [] as CustomRenderInstruction[] };
-      const { hints, customInstructions } = parsedTsx;
+      parsedJsxText = payload.jsxText || '';
+      const hints = parsedJsxText ? parseJsxHints(parsedJsxText) : [];
       const { instructions, warnings: w2 } = buildInstructions(manifest, hints);
       warnings.push(...w2);
 
       parsedManifest = manifest;
       parsedInstructions = instructions;
-      parsedCustomInstructions = customInstructions;
 
-      // Custom element grouping for UI preview
-      const customCounts: Record<string, number> = {};
-      for (const ci of customInstructions) {
-        const k = ci.inferredType ?? ci.category;
-        customCounts[k] = (customCounts[k] || 0) + 1;
-      }
-      const customGroups = Object.keys(customCounts).map((k) => ({
-        type: k,
-        count: customCounts[k],
-      }));
-
-      // Build preview rows with quick (non-importing) match check
       const preview: any[] = [];
       const counts: Record<string, number> = {};
       for (const inst of instructions) {
         counts[inst.variantPath] = (counts[inst.variantPath] || 0) + 1;
       }
-      const seen = new Set<string>();
+      const seen: Record<string, boolean> = {};
       for (const inst of instructions) {
-        if (seen.has(inst.variantPath)) continue;
-        seen.add(inst.variantPath);
+        if (seen[inst.variantPath]) continue;
+        seen[inst.variantPath] = true;
 
         let status: 'exact' | 'name' | 'missing' = 'missing';
         if (inst.figmaNodeId) {
           try {
             const n = await figma.getNodeByIdAsync(inst.figmaNodeId);
-            if (n && n.type === 'COMPONENT') status = 'exact';
+            if (n && (n.type === 'COMPONENT' || n.type === 'COMPONENT_SET')) status = 'exact';
           } catch {}
         }
         if (status === 'missing') {
           try {
             const tl = (figma as any).teamLibrary;
-            if (tl?.getAvailableComponentsAsync) {
+            if (tl && tl.getAvailableComponentsAsync) {
               const available = await tl.getAvailableComponentsAsync();
               if (
                 available.find((c: any) =>
-                  c.name.toLowerCase().includes(inst.component.toLowerCase()),
+                  c.name.toLowerCase().indexOf(inst.component.toLowerCase()) !== -1,
                 )
               ) {
                 status = 'name';
@@ -1216,31 +613,28 @@ figma.ui.onmessage = async (msg) => {
 
       figma.ui.postMessage({
         type: 'parsed',
-        payload: {
-          preview,
-          warnings,
-          customGroups,
-          customCount: parsedCustomInstructions.length,
-        },
+        payload: { preview, warnings, customGroups: [], customCount: 0 },
       });
       return;
     }
 
     if (type === 'build') {
       if (!parsedManifest || !parsedInstructions.length) {
-        uiError('Parse a usage.json first.');
+        uiError('Parse files first.');
         return;
       }
-      let target: FrameNode | null = null;
-      if (payload.targetFrameId && payload.targetFrameId !== '__new__') {
-        const n = await figma.getNodeByIdAsync(payload.targetFrameId);
-        if (n && n.type === 'FRAME') target = n as FrameNode;
+      if (!payload.screenshotBytes) {
+        uiError('Screenshot PNG is required.');
+        return;
       }
-      const report = await buildScreen(parsedManifest, parsedInstructions, target, {
+      const bytes =
+        payload.screenshotBytes instanceof Uint8Array
+          ? payload.screenshotBytes
+          : new Uint8Array(payload.screenshotBytes);
+      const report = await buildScreen(parsedManifest, parsedInstructions, bytes, {
         width: payload.width,
         height: payload.height,
         mode: payload.mode,
-        customInstructions: parsedCustomInstructions,
       });
       figma.ui.postMessage({ type: 'built', payload: report });
       uiLog(`done · ${report.exactMatch + report.nameMatch}/${report.total} placed`, '#86efac');
@@ -1256,18 +650,9 @@ figma.ui.onmessage = async (msg) => {
       return;
     }
 
-    if (type === 'resync') {
-      await resyncSelection();
-      return;
-    }
-    if (type === 'audit') {
-      auditSelection();
-      return;
-    }
-    if (type === 'reverse') {
-      reverseExport();
-      return;
-    }
+    if (type === 'resync') { await resyncSelection(); return; }
+    if (type === 'audit') { auditSelection(); return; }
+    if (type === 'reverse') { reverseExport(); return; }
   } catch (e) {
     uiError((e as Error).message);
   }

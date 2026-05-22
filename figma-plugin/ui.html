@@ -72,7 +72,7 @@
     <h2>1. Import</h2>
 
     <div class="field">
-      <label>Screen JSX (.jsx) — required</label>
+      <label>Screen JSX (.jsx/.tsx) — optional (used as coordinate fallback)</label>
       <input type="file" id="jsxFile" accept=".jsx,.tsx,.txt" />
     </div>
 
@@ -81,10 +81,16 @@
       <input type="file" id="usageFile" accept=".json" />
     </div>
 
+    <div class="field">
+      <label>Screen Screenshot (PNG/JPG) — required for build</label>
+      <input type="file" id="screenshot-input" accept="image/png,image/jpeg" />
+    </div>
+
     <div class="row">
-      <button class="primary" id="parseBtn" disabled>Parse</button>
+      <button class="primary" id="parseBtn" disabled>Parse files</button>
       <span id="parseStatus" style="color: var(--muted)"></span>
     </div>
+
 
     <div id="parseErrors"></div>
 
@@ -101,9 +107,13 @@
         </thead>
         <tbody></tbody>
       </table>
+      <div class="warn" style="margin-top:8px;">
+        Screenshot will be placed as background. Components will be overlaid at their screen coordinates.
+      </div>
       <div id="missingNote" class="warn" style="display:none">
         Some components will be placed as dashed placeholder frames.
       </div>
+
 
       <div id="custom-preview" style="display:none; margin-top:16px;">
         <div style="font-size:11px; font-weight:600; color:var(--muted); margin-bottom:6px;">
@@ -207,7 +217,7 @@
   }
 
   function refreshParseEnabled() {
-    $('parseBtn').disabled = !(jsxText && usageText);
+    $('parseBtn').disabled = !usageText;
   }
 
   $('jsxFile').addEventListener('change', async (e) => {
@@ -222,23 +232,44 @@
   $('parseBtn').addEventListener('click', () => {
     $('parseErrors').innerHTML = '';
     if (!usageText) {
-      $('parseErrors').innerHTML = '<div class="err">usage.json required. The JSX data-ds-* attributes will be used as fallback but accuracy is reduced. Drop usage.json to continue.</div>';
+      $('parseErrors').innerHTML = '<div class="err">usage.json required.</div>';
       return;
     }
-    send('parse', { jsxText, usageText });
+    send('parse', { jsxText: jsxText || '', usageText });
   });
 
   $('buildBtn').addEventListener('click', () => {
     if (!parsed) return;
+    const screenshotInput = $('screenshot-input');
+    const screenshotFile = screenshotInput.files && screenshotInput.files[0];
+    if (!screenshotFile) {
+      const d = document.createElement('div');
+      d.className = 'err';
+      d.textContent = 'Screenshot PNG is required.';
+      $('parseErrors').appendChild(d);
+      return;
+    }
     $('log').innerHTML = '';
     $('summary').style.display = 'none';
-    send('build', {
-      targetFrameId: $('targetFrame').value,
-      width: Number($('frameW').value) || 375,
-      height: Number($('frameH').value) || 812,
-      mode,
-    });
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const arrayBuffer = ev.target.result;
+      parent.postMessage({
+        pluginMessage: {
+          type: 'build',
+          payload: {
+            screenshotBytes: new Uint8Array(arrayBuffer),
+            targetFrameId: $('targetFrame').value,
+            width: Number($('frameW').value) || 375,
+            height: Number($('frameH').value) || 812,
+            mode,
+          },
+        },
+      }, '*');
+    };
+    reader.readAsArrayBuffer(screenshotFile);
   });
+
 
   $('zoomBtn').addEventListener('click', () => {
     if (lastFrameId) send('zoom', { frameId: lastFrameId });
