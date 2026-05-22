@@ -297,6 +297,7 @@ async function parseInstructions(usageJson, tsxText) {
   };
 }
 
+async function setTextContent(node, text) {
   if (!node.findAll) return;
   var textNodes = node.findAll(function (n) { return n.type === 'TEXT'; });
   if (!textNodes.length) return;
