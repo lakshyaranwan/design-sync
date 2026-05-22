@@ -319,6 +319,12 @@ window.onmessage = function (event) {
   else if (msg.type === 'build-complete') {
     /* status already updated */
   }
+  else if (msg.type === 'captured') {
+    state.parsed = msg.parsed;
+    state.screenshotBytes = msg.screenshotBytes || null;
+    state.screenshotDims = (msg.width && msg.height) ? { width: msg.width, height: msg.height } : null;
+    renderParsed();
+  }
 };
 </script>
 </body>
