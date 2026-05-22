@@ -110,29 +110,16 @@ async function fetchLibraryCatalog(fileKey, token) {
   post('status', { message: 'Fetching components...' });
   var componentsResp = await figmaApi('/v1/files/' + fileKey + '/components', token);
   var components = (componentsResp.meta && componentsResp.meta.components) || [];
-  post('catalog-progress', { partial: { components: components.map(function (c) {
-    return {
-      key: c.key, name: c.name, description: c.description || '',
-      containingFrame: c.containing_frame || null,
-      componentSetId: c.component_set_id || null
-    };
-  }) } });
+  post('status', { message: 'Fetched ' + components.length + ' components. Fetching component sets...' });
 
-  post('status', { message: 'Fetching component sets...' });
   var setsResp = await figmaApi('/v1/files/' + fileKey + '/component_sets', token);
   var componentSets = (setsResp.meta && setsResp.meta.component_sets) || [];
-  post('catalog-progress', { partial: { componentSets: componentSets.map(function (s) {
-    return { key: s.key, name: s.name, description: s.description || '', containingFrame: s.containing_frame || null };
-  }) } });
+  post('status', { message: 'Fetched ' + componentSets.length + ' sets. Fetching styles...' });
 
-  post('status', { message: 'Fetching styles...' });
   var stylesResp = await figmaApi('/v1/files/' + fileKey + '/styles', token);
   var styles = (stylesResp.meta && stylesResp.meta.styles) || [];
-  post('catalog-progress', { partial: { styles: styles.map(function (s) {
-    return { key: s.key, name: s.name, styleType: s.style_type, description: s.description || '' };
-  }) } });
+  post('status', { message: 'Fetched ' + styles.length + ' styles. Fetching file metadata...' });
 
-  post('status', { message: 'Fetching file metadata...' });
   var fileMeta = await figmaApi('/v1/files/' + fileKey + '?depth=1', token);
 
   return {
