@@ -622,6 +622,7 @@ async function buildScreen(
     missing,
     approximate,
     mdVersion: manifest.designMdVersion || '',
+    customCount,
   };
 }
 
