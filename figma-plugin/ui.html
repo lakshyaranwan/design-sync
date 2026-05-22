@@ -50,6 +50,18 @@
 <div class="row toolbar"><button id="rescanPageBtn">Scan current page</button><button id="rescanFileBtn">Scan whole file</button></div>
 <div id="attached"></div>
 
+<h2>Recreate Screen from Files</h2>
+<div class="muted">Import TSX, usage.json, and screenshot. Components are resolved against the fetched library catalog above.</div>
+<div class="row"><label style="flex:1">usage.json <input type="file" id="usageInput" accept="application/json,.json" /></label></div>
+<div class="row"><label style="flex:1">TSX file <input type="file" id="tsxInput" accept=".tsx,.jsx,text/plain" /></label></div>
+<div class="row"><label style="flex:1">Screenshot (PNG/JPG) <input type="file" id="shotInput" accept="image/png,image/jpeg" /></label></div>
+<div class="row toolbar">
+  <label>Mode <select id="modeSel"><option value="">(from usage.json)</option><option value="Light">Light</option><option value="Dark">Dark</option></select></label>
+  <button id="parseBtn">Parse files</button>
+  <button id="buildBtn" class="primary" disabled>Build screen</button>
+</div>
+<div id="parsed"><div class="muted">No files parsed yet.</div></div>
+
 <script>
 var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null };
 var renderJob = 0;
