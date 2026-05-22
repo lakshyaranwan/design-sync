@@ -218,6 +218,9 @@ $('clearBtn').onclick = function () { send('clear-config'); };
 $('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
 $('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
 $('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
+$('captureBtn').onclick = function () {
+  send('capture-from-url', { url: $('captureUrl').value.trim() });
+};
 
 function renderParsed() {
   var el = $('parsed');
