@@ -890,7 +890,7 @@ function parseFullTsx(tsxText) {
             var tag = openTagMatch[1];
             var id = "node-".concat(orderIndex.toString().padStart(3, '0'));
             var parentId = (_a = depthStack[depthStack.length - 1]) !== null && _a !== void 0 ? _a : 'root';
-            var styleMatch = line.match(/style=\{\{(.+?)(?:\}\}|$)/s);
+            var styleMatch = line.match(/style=\{\{([\s\S]+?)(?:\}\}|$)/);
             var styleStr = styleMatch ? styleMatch[1] : '';
             if (styleMatch && !line.includes('}}')) {
                 for (var j = i + 1; j < Math.min(i + 10, lines.length); j++) {
