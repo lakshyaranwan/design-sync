@@ -319,6 +319,43 @@ async function setTextContent(node, text) {
   } catch (e) {}
 }
 
+function layoutFallback(instructions, frameW, frameH) {
+  // Group missing-coord items by section, stack them top-down (or bottom-up for sticky footer).
+  var pad = 20;
+  var gap = 12;
+  var groups = {};
+  instructions.forEach(function (it, idx) {
+    if (it.placement.x != null && it.placement.y != null) return;
+    var sec = it.placement.section || 'Body';
+    (groups[sec] = groups[sec] || []).push({ it: it, idx: idx });
+  });
+  Object.keys(groups).forEach(function (sec) {
+    var list = groups[sec].sort(function (a, b) {
+      return (a.it.placement.orderInSection || 0) - (b.it.placement.orderInSection || 0);
+    });
+    var anchor = list[0].it.placement.anchor || (/footer/i.test(sec) ? 'bottom' : 'top');
+    var sectionTop;
+    if (anchor === 'bottom') {
+      var totalH = list.reduce(function (s, e) { return s + ((e.it.placement.height || 52) + gap); }, -gap);
+      sectionTop = frameH - pad - totalH;
+    } else if (sec === 'Header') {
+      sectionTop = pad;
+    } else {
+      sectionTop = Math.round(frameH * 0.25);
+    }
+    var cursor = sectionTop;
+    list.forEach(function (e) {
+      var w = e.it.placement.width || (frameW - pad * 2);
+      var h = e.it.placement.height || 52;
+      e.it.placement.x = e.it.placement.x != null ? e.it.placement.x : pad;
+      e.it.placement.y = e.it.placement.y != null ? e.it.placement.y : cursor;
+      e.it.placement.width = w;
+      e.it.placement.height = h;
+      cursor += h + gap;
+    });
+  });
+}
+
 async function buildScreen(payload) {
   var instructions = payload.instructions || [];
   var screenshotBytes = payload.screenshotBytes;
@@ -326,6 +363,8 @@ async function buildScreen(payload) {
   var height = payload.height || 812;
   var mode = payload.mode || '';
   var screenName = payload.screenName || 'DS Mapped Screen';
+
+  layoutFallback(instructions, width, height);
 
   var frame = figma.createFrame();
   frame.name = screenName;
@@ -345,21 +384,39 @@ async function buildScreen(payload) {
 
   for (var i = 0; i < instructions.length; i++) {
     var instr = instructions[i];
-    var coords = instr.placement || { x: 0, y: 0, width: 320, height: 48 };
+    var coords = instr.placement;
     var match = { matchType: instr.matchType, key: instr.matchKey, kind: instr.matchKind };
     var imported = match.key ? await importFromCatalog(match) : null;
 
     if (imported && imported.node) {
       var instance = imported.node.createInstance();
-      var variantProps = parseVariantPath(instr.variantPath);
-      if (mode) variantProps.Mode = mode;
-      try { instance.setProperties(variantProps); } catch (e) {}
+
+      // Only apply setProperties when we did NOT import the exact variant directly.
+      if (!imported.exactVariant) {
+        var variantProps = parseVariantPath(instr.variantPath);
+        // Only set Mode if the component actually exposes it (avoid throwing for missing prop)
+        try {
+          var defs = instance.componentProperties || {};
+          if (mode && defs.Mode) variantProps.Mode = mode;
+          if (Object.keys(variantProps).length) instance.setProperties(variantProps);
+        } catch (e) {}
+      }
+
       if (instr.props && instr.props.label) {
         await setTextContent(instance, instr.props.label);
       }
       instance.x = coords.x;
       instance.y = coords.y;
-      try { instance.resize(coords.width, coords.height); } catch (e) {}
+      // Only resize if explicit width/height were provided AND differ from native.
+      // Forced resize on icon-only buttons distorts them — keep native size otherwise.
+      if (coords.width && coords.height) {
+        var nativeW = instance.width, nativeH = instance.height;
+        var ratioW = coords.width / nativeW, ratioH = coords.height / nativeH;
+        // Avoid silly stretches: only resize when within 25% of native, else keep native.
+        if (ratioW > 0.75 && ratioW < 1.5 && ratioH > 0.75 && ratioH < 1.5) {
+          try { instance.resize(coords.width, coords.height); } catch (e) {}
+        }
+      }
       instance.setPluginData('ds-component', instr.component);
       instance.setPluginData('ds-variant', instr.variantPath || '');
       instance.setPluginData('ds-match-type', instr.matchType || '');
@@ -368,9 +425,9 @@ async function buildScreen(payload) {
     } else {
       var ph = figma.createFrame();
       ph.name = '[MISSING] ' + instr.component;
-      ph.resize(Math.max(1, coords.width), Math.max(1, coords.height));
-      ph.x = coords.x;
-      ph.y = coords.y;
+      ph.resize(Math.max(1, coords.width || 100), Math.max(1, coords.height || 40));
+      ph.x = coords.x || 0;
+      ph.y = coords.y || 0;
       ph.fills = [{ type: 'SOLID', color: { r: 1, g: 0.85, b: 0.85 }, opacity: 0.6 }];
       ph.strokes = [{ type: 'SOLID', color: { r: 0.85, g: 0.1, b: 0.1 } }];
       ph.strokeWeight = 1;
