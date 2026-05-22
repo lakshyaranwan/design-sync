@@ -27,17 +27,16 @@ function uiError(message) {
 }
 // ---------- Init: list frames & check libraries ----------
 async function sendInit() {
-    var _a, _b;
     const frames = figma.currentPage.children
         .filter((n) => n.type === 'FRAME')
         .map((n) => ({ id: n.id, name: n.name }));
     let librariesConnected = true;
     try {
-        const libs = await ((_b = (_a = figma.teamLibrary) === null || _a === void 0 ? void 0 : _a.getAvailableLibrariesAsync) === null || _b === void 0 ? void 0 : _b.call(_a));
+        const libs = await figma.teamLibrary?.getAvailableLibrariesAsync?.();
         if (libs && Array.isArray(libs))
             librariesConnected = libs.length > 0;
     }
-    catch (_c) {
+    catch {
         // Older API — assume connected, will surface during lookup
     }
     figma.ui.postMessage({ type: 'frames', payload: { frames, librariesConnected } });
@@ -110,15 +109,21 @@ function buildInstructions(manifest, hints) {
     const enriched = manifest.components.map((c, i) => {
         const queue = hintQueueByComponent[c.component];
         const hint = queue && queue.length ? queue.shift() : undefined;
-        if ((hint === null || hint === void 0 ? void 0 : hint.variant) && hint.variant !== c.variantPath) {
+        if (hint?.variant && hint.variant !== c.variantPath) {
             warnings.push(`Mismatch for ${c.component}: JSX data-ds-variant="${hint.variant}" vs usage.json "${c.variantPath}". Using usage.json. Fix the upstream generator so both files agree.`);
         }
-        if ((hint === null || hint === void 0 ? void 0 : hint.nodeId) && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
+        if (hint?.nodeId && c.figmaNodeId && hint.nodeId !== c.figmaNodeId) {
             warnings.push(`Mismatch for ${c.component}: JSX data-ds-node-id="${hint.nodeId}" vs usage.json "${c.figmaNodeId}". Using usage.json.`);
         }
-        return Object.assign(Object.assign({}, c), { 
+        return {
+            ...c,
             // Always trust usage.json; fall back to JSX hint only when usage.json is empty.
-            variantPath: c.variantPath, figmaNodeId: c.figmaNodeId || (hint === null || hint === void 0 ? void 0 : hint.nodeId) || '', widthHint: hint === null || hint === void 0 ? void 0 : hint.widthHint, heightHint: hint === null || hint === void 0 ? void 0 : hint.heightHint, globalOrder: i });
+            variantPath: c.variantPath,
+            figmaNodeId: c.figmaNodeId || hint?.nodeId || '',
+            widthHint: hint?.widthHint,
+            heightHint: hint?.heightHint,
+            globalOrder: i,
+        };
     });
     // Stable sort: section-known-order, then orderInSection
     enriched.sort((a, b) => {
@@ -150,20 +155,18 @@ function matchesVariantProps(node, props) {
     return Object.keys(props).every((k) => vp[k] === props[k]);
 }
 function climbToComponentRoot(node) {
-    var _a;
     let cur = node;
     while (cur) {
         if (cur.type === 'COMPONENT' || cur.type === 'COMPONENT_SET') {
             return { type: cur.type, node: cur };
         }
-        cur = (_a = cur.parent) !== null && _a !== void 0 ? _a : null;
+        cur = cur.parent ?? null;
     }
     return null;
 }
 function pickVariantFromSet(set, entry, mode) {
-    var _a, _b, _c;
     const variantProps = parseVariantPath(entry.variantPath);
-    if (variantProps.Mode || ((_b = (_a = set.children[0]) === null || _a === void 0 ? void 0 : _a.variantProperties) === null || _b === void 0 ? void 0 : _b.Mode)) {
+    if (variantProps.Mode || set.children[0]?.variantProperties?.Mode) {
         variantProps.Mode = mode;
     }
     const exact = set.children.find((c) => matchesVariantProps(c, variantProps));
@@ -182,7 +185,7 @@ function pickVariantFromSet(set, entry, mode) {
         if (!best || score > best.score)
             best = { node: c, score };
     }
-    return (_c = best === null || best === void 0 ? void 0 : best.node) !== null && _c !== void 0 ? _c : null;
+    return best?.node ?? null;
 }
 async function resolveComponent(entry, mode) {
     // 1. Exact node ID — but if it points INSIDE a component (an inner layer),
@@ -193,7 +196,7 @@ async function resolveComponent(entry, mode) {
             const node = await figma.getNodeByIdAsync(entry.figmaNodeId);
             if (node) {
                 const root = climbToComponentRoot(node);
-                if ((root === null || root === void 0 ? void 0 : root.type) === 'COMPONENT') {
+                if (root?.type === 'COMPONENT') {
                     if (node.id !== root.node.id) {
                         uiLog(`    ↑ node is inside component "${root.node.name}" — using parent`, '#93c5fd');
                     }
@@ -205,7 +208,7 @@ async function resolveComponent(entry, mode) {
                     }
                     return { node: root.node, matchType: 'exact-id' };
                 }
-                if ((root === null || root === void 0 ? void 0 : root.type) === 'COMPONENT_SET') {
+                if (root?.type === 'COMPONENT_SET') {
                     const match = pickVariantFromSet(root.node, entry, mode);
                     if (match) {
                         uiLog(`    ↑ node is inside set "${root.node.name}" — picked variant "${match.name}"`, '#93c5fd');
@@ -214,7 +217,7 @@ async function resolveComponent(entry, mode) {
                 }
             }
         }
-        catch (_a) { }
+        catch { }
     }
     // 2. Component set + variant resolve
     if (entry.figmaComponentSetId) {
@@ -226,12 +229,12 @@ async function resolveComponent(entry, mode) {
                     return { node: match, matchType: 'set-variant' };
             }
         }
-        catch (_b) { }
+        catch { }
     }
     // 3. Remote library by name
     try {
         const tl = figma.teamLibrary;
-        if (tl === null || tl === void 0 ? void 0 : tl.getAvailableComponentsAsync) {
+        if (tl?.getAvailableComponentsAsync) {
             const available = await tl.getAvailableComponentsAsync();
             const want = entry.component.toLowerCase();
             const remote = available.find((c) => c.name.toLowerCase().includes(want));
@@ -241,7 +244,7 @@ async function resolveComponent(entry, mode) {
             }
         }
     }
-    catch (_c) { }
+    catch { }
     return { node: null, matchType: 'missing' };
 }
 // ---------- Helpers: apply props + text ----------
@@ -284,10 +287,9 @@ async function setTextContent(instance, label) {
 }
 // ---------- Placeholder ----------
 async function createMissingPlaceholder(instruction) {
-    var _a, _b;
     const f = figma.createFrame();
     f.name = `[MISSING] ${instruction.variantPath}`;
-    f.resize((_a = instruction.widthHint) !== null && _a !== void 0 ? _a : 320, (_b = instruction.heightHint) !== null && _b !== void 0 ? _b : 48);
+    f.resize(instruction.widthHint ?? 320, instruction.heightHint ?? 48);
     f.fills = [{ type: 'SOLID', color: { r: 1, g: 0.95, b: 0.95 } }];
     f.strokes = [{ type: 'SOLID', color: { r: 0.88, g: 0.2, b: 0.2 } }];
     f.strokeWeight = 1.5;
@@ -305,15 +307,14 @@ async function createMissingPlaceholder(instruction) {
         label.y = 8;
         f.appendChild(label);
     }
-    catch (_c) { }
+    catch { }
     return f;
 }
 // ---------- Build ----------
 async function buildScreen(manifest, instructions, targetFrame, options) {
-    var _a, _b, _c;
     // Split into multiple frames if height limit exceeded
     const MAX_HEIGHT = 10000;
-    const frame = targetFrame !== null && targetFrame !== void 0 ? targetFrame : figma.createFrame();
+    const frame = targetFrame ?? figma.createFrame();
     frame.name = manifest.screen || 'DS Mapped Screen';
     frame.resize(options.width, Math.min(options.height, MAX_HEIGHT));
     frame.layoutMode = 'VERTICAL';
@@ -370,10 +371,10 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             const parentSet = node.parent;
             if (parentSet && parentSet.type === 'COMPONENT_SET') {
                 const set = parentSet;
-                const seed = (_a = set.defaultVariant) !== null && _a !== void 0 ? _a : node;
+                const seed = set.defaultVariant ?? node;
                 instance = seed.createInstance();
                 const variantProps = parseVariantPath(instr.variantPath);
-                const sample = (_b = set.children[0]) === null || _b === void 0 ? void 0 : _b.variantProperties;
+                const sample = set.children[0]?.variantProperties;
                 if (sample && sample.Mode)
                     variantProps['Mode'] = options.mode;
                 try {
@@ -403,7 +404,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             try {
                 instance.layoutSizingHorizontal = 'FILL';
             }
-            catch (_d) { }
+            catch { }
             if (matchType === 'exact-id' || matchType === 'set-variant') {
                 exactMatch++;
                 uiLog(`    ✓ ${matchType}`, '#86efac');
@@ -420,7 +421,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
             try {
                 ph.layoutSizingHorizontal = 'FILL';
             }
-            catch (_e) { }
+            catch { }
             missing.push(instr.variantPath);
             uiLog(`    ✗ missing → placeholder`, '#fca5a5');
         }
@@ -442,7 +443,7 @@ async function buildScreen(manifest, instructions, targetFrame, options) {
         figma.currentPage.appendChild(frame);
     }
     // Split if too tall
-    if (((_c = frame.height) !== null && _c !== void 0 ? _c : 0) > MAX_HEIGHT) {
+    if ((frame.height ?? 0) > MAX_HEIGHT) {
         uiLog(`! frame height ${Math.round(frame.height)} > ${MAX_HEIGHT}, splitting`, '#fbbf24');
         splitFrame(frame, MAX_HEIGHT);
     }
@@ -489,7 +490,6 @@ function splitFrame(frame, maxHeight) {
 }
 // ---------- Custom (non-DS) parser + builder ----------
 function parseFullTsx(tsxText) {
-    var _a, _b, _c, _d;
     const hints = [];
     const customInstructions = [];
     const sectionMap = {};
@@ -505,10 +505,9 @@ function parseFullTsx(tsxText) {
         'color.light.neutral.900': '#111827ff',
     };
     function resolveColorValue(raw) {
-        var _a;
         const tokenMatch = raw.match(/tokens\[['"]([^'"]+)['"]\]/);
         if (tokenMatch)
-            return (_a = TOKEN_HEX[tokenMatch[1]]) !== null && _a !== void 0 ? _a : raw;
+            return TOKEN_HEX[tokenMatch[1]] ?? raw;
         if (raw.startsWith('#'))
             return raw;
         if (raw.startsWith('rgb'))
@@ -625,7 +624,7 @@ function parseFullTsx(tsxText) {
         if (openTagMatch) {
             const tag = openTagMatch[1];
             const id = `node-${orderIndex.toString().padStart(3, '0')}`;
-            const parentId = (_a = depthStack[depthStack.length - 1]) !== null && _a !== void 0 ? _a : 'root';
+            const parentId = depthStack[depthStack.length - 1] ?? 'root';
             const styleMatch = line.match(/style=\{\{(.+?)(?:\}\}|$)/s);
             let styleStr = styleMatch ? styleMatch[1] : '';
             if (styleMatch && !line.includes('}}')) {
@@ -641,13 +640,13 @@ function parseFullTsx(tsxText) {
             let category = 'custom-frame';
             let inferredType = 'frame';
             if (['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span'].includes(tag)) {
-                const textMatch = ((_b = lines[i + 1]) !== null && _b !== void 0 ? _b : '').match(/^\s*([^<{]+?)\s*$/);
+                const textMatch = (lines[i + 1] ?? '').match(/^\s*([^<{]+?)\s*$/);
                 if (textMatch) {
                     category = 'custom-text';
                     inferredType = 'text';
                 }
             }
-            const prevLine = (_c = lines[i - 1]) !== null && _c !== void 0 ? _c : '';
+            const prevLine = lines[i - 1] ?? '';
             if (prevLine.includes('image:'))
                 inferredType = 'image-placeholder';
             if (prevLine.includes('icon:'))
@@ -667,7 +666,7 @@ function parseFullTsx(tsxText) {
                 orderIndex: orderIndex++,
             };
             if (category === 'custom-text') {
-                const textLine = (_d = lines[i + 1]) === null || _d === void 0 ? void 0 : _d.trim();
+                const textLine = lines[i + 1]?.trim();
                 if (textLine && !textLine.startsWith('<')) {
                     instr.textContent = textLine.replace(/[{}'"`]/g, '').trim();
                 }
@@ -704,7 +703,6 @@ function hexToRgb(hex) {
     return null;
 }
 function parseBoxShadow(shadow) {
-    var _a, _b;
     const m = shadow.match(/(-?\d+)px\s+(-?\d+)px\s+(\d+)px\s*(\d+)?px?\s*rgba?\((\d+),\s*(\d+),\s*(\d+),?\s*([\d.]+)?\)/);
     if (!m)
         return null;
@@ -712,12 +710,12 @@ function parseBoxShadow(shadow) {
         type: 'DROP_SHADOW',
         offset: { x: parseInt(m[1]), y: parseInt(m[2]) },
         radius: parseInt(m[3]),
-        spread: parseInt((_a = m[4]) !== null && _a !== void 0 ? _a : '0'),
+        spread: parseInt(m[4] ?? '0'),
         color: {
             r: parseInt(m[5]) / 255,
             g: parseInt(m[6]) / 255,
             b: parseInt(m[7]) / 255,
-            a: parseFloat((_b = m[8]) !== null && _b !== void 0 ? _b : '1'),
+            a: parseFloat(m[8] ?? '1'),
         },
         blendMode: 'NORMAL',
         showShadowBehindNode: false,
@@ -725,24 +723,22 @@ function parseBoxShadow(shadow) {
     };
 }
 function mapJustify(val) {
-    var _a;
     const map = {
         'flex-start': 'MIN', 'start': 'MIN',
         'center': 'CENTER',
         'flex-end': 'MAX', 'end': 'MAX',
         'space-between': 'SPACE_BETWEEN',
     };
-    return (_a = map[val !== null && val !== void 0 ? val : 'flex-start']) !== null && _a !== void 0 ? _a : 'MIN';
+    return map[val ?? 'flex-start'] ?? 'MIN';
 }
 function mapAlign(val) {
-    var _a;
     const map = {
         'flex-start': 'MIN', 'start': 'MIN',
         'center': 'CENTER',
         'flex-end': 'MAX', 'end': 'MAX',
         'stretch': 'STRETCH',
     };
-    return (_a = map[val !== null && val !== void 0 ? val : 'flex-start']) !== null && _a !== void 0 ? _a : 'MIN';
+    return map[val ?? 'flex-start'] ?? 'MIN';
 }
 function applyFrameSizing(frame, instr, parent) {
     if (parent.layoutMode === 'NONE')
@@ -751,33 +747,33 @@ function applyFrameSizing(frame, instr, parent) {
         try {
             frame.layoutSizingHorizontal = 'FILL';
         }
-        catch (_a) { }
+        catch { }
     }
     else if (typeof instr.styles.width === 'number') {
         try {
             frame.layoutSizingHorizontal = 'FIXED';
         }
-        catch (_b) { }
+        catch { }
         frame.resize(instr.styles.width, frame.height || 1);
     }
     else {
         try {
             frame.layoutSizingHorizontal = 'HUG';
         }
-        catch (_c) { }
+        catch { }
     }
     if (typeof instr.styles.height === 'number') {
         try {
             frame.layoutSizingVertical = 'FIXED';
         }
-        catch (_d) { }
+        catch { }
         frame.resize(frame.width || 1, instr.styles.height);
     }
     else {
         try {
             frame.layoutSizingVertical = 'HUG';
         }
-        catch (_e) { }
+        catch { }
     }
 }
 function applyRectSizing(rect, instr, parent) {
@@ -787,11 +783,10 @@ function applyRectSizing(rect, instr, parent) {
         try {
             rect.layoutSizingHorizontal = 'FILL';
         }
-        catch (_a) { }
+        catch { }
     }
 }
 async function buildCustomNodes(instructions, rootFrame) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const nodeMap = new Map();
     nodeMap.set('root', rootFrame);
     let count = 0;
@@ -810,25 +805,26 @@ async function buildCustomNodes(instructions, rootFrame) {
         try {
             sf.layoutSizingHorizontal = 'FILL';
         }
-        catch (_a) { }
+        catch { }
         return sf;
     }
     for (const instr of instructions) {
-        const parentNode = (_b = nodeMap.get((_a = instr.parentId) !== null && _a !== void 0 ? _a : 'root')) !== null && _b !== void 0 ? _b : getSectionFrame((_c = instr.sectionName) !== null && _c !== void 0 ? _c : 'Body');
+        const parentNode = nodeMap.get(instr.parentId ?? 'root') ??
+            getSectionFrame(instr.sectionName ?? 'Body');
         let created = null;
         try {
             if (instr.category === 'custom-text') {
                 const t = figma.createText();
-                const weight = (_d = instr.styles.fontWeight) !== null && _d !== void 0 ? _d : 400;
+                const weight = instr.styles.fontWeight ?? 400;
                 const style = weight >= 700 ? 'Bold' : weight >= 600 ? 'SemiBold' : weight >= 500 ? 'Medium' : 'Regular';
                 try {
                     await figma.loadFontAsync({ family: 'Inter', style });
                 }
-                catch (_k) {
+                catch {
                     await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
                 }
                 t.fontName = { family: 'Inter', style };
-                t.characters = (_e = instr.textContent) !== null && _e !== void 0 ? _e : '';
+                t.characters = instr.textContent ?? '';
                 if (instr.styles.fontSize)
                     t.fontSize = instr.styles.fontSize;
                 if (instr.styles.lineHeight)
@@ -849,7 +845,7 @@ async function buildCustomNodes(instructions, rootFrame) {
                 const r = figma.createRectangle();
                 r.name = instr.inferredType === 'divider'
                     ? '[divider]'
-                    : `[${instr.inferredType}] ${(_f = instr.className) !== null && _f !== void 0 ? _f : ''}`;
+                    : `[${instr.inferredType}] ${instr.className ?? ''}`;
                 const w = typeof instr.styles.width === 'number' ? instr.styles.width : 40;
                 const h = typeof instr.styles.height === 'number' ? instr.styles.height : 40;
                 r.resize(Math.max(1, w), Math.max(1, h));
@@ -861,14 +857,14 @@ async function buildCustomNodes(instructions, rootFrame) {
                 if (instr.styles.borderRadius)
                     r.cornerRadius = instr.styles.borderRadius;
                 r.setPluginData('ds-linked', 'false');
-                r.setPluginData('ds-custom-type', (_g = instr.inferredType) !== null && _g !== void 0 ? _g : 'rect');
+                r.setPluginData('ds-custom-type', instr.inferredType ?? 'rect');
                 parentNode.appendChild(r);
                 applyRectSizing(r, instr, parentNode);
                 created = r;
             }
             else {
                 const f = figma.createFrame();
-                f.name = (_j = (_h = instr.className) !== null && _h !== void 0 ? _h : instr.tag) !== null && _j !== void 0 ? _j : 'frame';
+                f.name = instr.className ?? instr.tag ?? 'frame';
                 f.fills = [];
                 if (instr.styles.display === 'flex') {
                     f.layoutMode = instr.styles.flexDirection === 'row' ? 'HORIZONTAL' : 'VERTICAL';
@@ -955,7 +951,7 @@ async function resyncSelection() {
                 child.swapComponent(node);
                 updated++;
             }
-            catch (_a) { }
+            catch { }
         }
     }
     uiLog(`re-synced ${updated} instance(s)`, '#86efac');
@@ -1016,7 +1012,6 @@ function reverseExport() {
 }
 // ---------- Message handler ----------
 figma.ui.onmessage = async (msg) => {
-    var _a;
     const { type, payload } = msg;
     try {
         if (type === 'init') {
@@ -1048,7 +1043,7 @@ figma.ui.onmessage = async (msg) => {
             // Custom element grouping for UI preview
             const customCounts = {};
             for (const ci of customInstructions) {
-                const k = (_a = ci.inferredType) !== null && _a !== void 0 ? _a : ci.category;
+                const k = ci.inferredType ?? ci.category;
                 customCounts[k] = (customCounts[k] || 0) + 1;
             }
             const customGroups = Object.keys(customCounts).map((k) => ({
@@ -1073,19 +1068,19 @@ figma.ui.onmessage = async (msg) => {
                         if (n && n.type === 'COMPONENT')
                             status = 'exact';
                     }
-                    catch (_b) { }
+                    catch { }
                 }
                 if (status === 'missing') {
                     try {
                         const tl = figma.teamLibrary;
-                        if (tl === null || tl === void 0 ? void 0 : tl.getAvailableComponentsAsync) {
+                        if (tl?.getAvailableComponentsAsync) {
                             const available = await tl.getAvailableComponentsAsync();
                             if (available.find((c) => c.name.toLowerCase().includes(inst.component.toLowerCase()))) {
                                 status = 'name';
                             }
                         }
                     }
-                    catch (_c) { }
+                    catch { }
                 }
                 preview.push({
                     component: inst.component,
