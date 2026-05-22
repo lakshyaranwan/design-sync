@@ -50,12 +50,50 @@
 <div class="row toolbar"><button id="rescanPageBtn">Scan current page</button><button id="rescanFileBtn">Scan whole file</button></div>
 <div id="attached"></div>
 
+<h2>Recreate Screen from Files</h2>
+<div class="muted">Import TSX, usage.json, and screenshot. Components are resolved against the fetched library catalog above.</div>
+<div class="row"><label style="flex:1">usage.json <input type="file" id="usageInput" accept="application/json,.json" /></label></div>
+<div class="row"><label style="flex:1">TSX file <input type="file" id="tsxInput" accept=".tsx,.jsx,text/plain" /></label></div>
+<div class="row"><label style="flex:1">Screenshot (PNG/JPG) <input type="file" id="shotInput" accept="image/png,image/jpeg" /></label></div>
+<div class="row toolbar">
+  <label>Mode <select id="modeSel"><option value="">(from usage.json)</option><option value="Light">Light</option><option value="Dark">Dark</option></select></label>
+  <button id="parseBtn">Parse files</button>
+  <button id="buildBtn" class="primary" disabled>Build screen</button>
+</div>
+<div id="parsed"><div class="muted">No files parsed yet.</div></div>
+
 <script>
-var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null };
+var state = { hasToken: false, libraryUrl: '', catalog: null, catalogSummary: null, attached: null, parsed: null, screenshotBytes: null, screenshotDims: null };
 var renderJob = 0;
 
 function $(id) { return document.getElementById(id); }
 function send(type, extra) { parent.postMessage({ pluginMessage: Object.assign({ type: type }, extra || {}) }, '*'); }
+
+function readFileAsText(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(r.result); };
+    r.onerror = function () { reject(r.error); };
+    r.readAsText(file);
+  });
+}
+function readFileAsBytes(file) {
+  return new Promise(function (resolve, reject) {
+    var r = new FileReader();
+    r.onload = function () { resolve(new Uint8Array(r.result)); };
+    r.onerror = function () { reject(r.error); };
+    r.readAsArrayBuffer(file);
+  });
+}
+function readImageDims(file) {
+  return new Promise(function (resolve) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () { resolve({ width: img.naturalWidth, height: img.naturalHeight }); URL.revokeObjectURL(url); };
+    img.onerror = function () { resolve(null); URL.revokeObjectURL(url); };
+    img.src = url;
+  });
+}
 
 function renderCatalog() {
   renderJob += 1;
@@ -177,6 +215,63 @@ $('loadCachedBtn').onclick = function () { send('load-cached-catalog'); };
 $('rescanPageBtn').onclick = function () { send('rescan-attached', { scope: 'page' }); };
 $('rescanFileBtn').onclick = function () { send('rescan-attached', { scope: 'file' }); };
 
+function renderParsed() {
+  var el = $('parsed');
+  var p = state.parsed;
+  if (!p) { el.innerHTML = '<div class="muted">No files parsed yet.</div>'; $('buildBtn').disabled = true; return; }
+  var matched = 0, missing = 0;
+  var rows = p.instructions.map(function (it) {
+    var ok = it.matchKey ? true : false;
+    if (ok) matched++; else missing++;
+    var badge = ok
+      ? '<span class="pill" style="background:#e6f7ec;color:#137a3b">' + escapeHtml(it.matchType) + '</span>'
+      : '<span class="pill" style="background:#fde8e8;color:#a31414">' + escapeHtml(it.matchType) + '</span>';
+    return '<div class="item">' + badge + ' <strong>' + escapeHtml(it.component) + '</strong>'
+      + (it.variantPath ? ' <span class="muted">' + escapeHtml(it.variantPath) + '</span>' : '')
+      + ' <span class="muted">@ ' + it.placement.x + ',' + it.placement.y + ' · ' + it.placement.width + '×' + it.placement.height + '</span></div>';
+  }).join('');
+  el.innerHTML = '<div class="card"><span class="pill">' + matched + ' matched</span><span class="pill">' + missing + ' missing</span>'
+    + ' <span class="muted">screen: ' + escapeHtml(p.screen) + '</span></div>'
+    + '<div class="scroll">' + (rows || '<div class="muted">No instructions in usage.json.</div>') + '</div>';
+  $('buildBtn').disabled = !(state.screenshotBytes && p.instructions.length);
+}
+
+$('shotInput').onchange = async function (e) {
+  var f = e.target.files && e.target.files[0];
+  if (!f) { state.screenshotBytes = null; state.screenshotDims = null; renderParsed(); return; }
+  state.screenshotBytes = await readFileAsBytes(f);
+  state.screenshotDims = await readImageDims(f);
+  $('status').textContent = 'Screenshot loaded' + (state.screenshotDims ? ' (' + state.screenshotDims.width + '×' + state.screenshotDims.height + ')' : '');
+  renderParsed();
+};
+
+$('parseBtn').onclick = async function () {
+  var usageFile = $('usageInput').files[0];
+  var tsxFile = $('tsxInput').files[0];
+  if (!usageFile) { $('status').textContent = 'usage.json required.'; return; }
+  var usageText = await readFileAsText(usageFile);
+  var tsxText = tsxFile ? await readFileAsText(tsxFile) : '';
+  var usageJson;
+  try { usageJson = JSON.parse(usageText); }
+  catch (e) { $('status').textContent = 'Invalid JSON: ' + e.message; return; }
+  send('parse-files', { usageJson: usageJson, tsxText: tsxText });
+};
+
+$('buildBtn').onclick = function () {
+  var p = state.parsed;
+  if (!p || !state.screenshotBytes) return;
+  var w = (state.screenshotDims && state.screenshotDims.width) || p.width || 375;
+  var h = (state.screenshotDims && state.screenshotDims.height) || p.height || 812;
+  send('build-screen', {
+    instructions: p.instructions,
+    screenshotBytes: state.screenshotBytes,
+    width: w,
+    height: h,
+    mode: $('modeSel').value || p.mode || '',
+    screenName: p.screen
+  });
+};
+
 window.onmessage = function (event) {
   var msg = event.data.pluginMessage;
   if (!msg) return;
@@ -209,6 +304,13 @@ window.onmessage = function (event) {
   else if (msg.type === 'attached') {
     state.attached = msg.attached;
     renderAttached();
+  }
+  else if (msg.type === 'parsed-instructions') {
+    state.parsed = msg;
+    renderParsed();
+  }
+  else if (msg.type === 'build-complete') {
+    /* status already updated */
   }
 };
 </script>
