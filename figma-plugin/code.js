@@ -140,6 +140,194 @@ async function fetchLibraryCatalog(fileKey, token) {
   };
 }
 
+// ---------- catalog-based component resolution ----------
+function normalizeName(s) {
+  return String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function parseVariantPath(variantPath) {
+  var out = {};
+  if (!variantPath) return out;
+  String(variantPath).split(',').forEach(function (pair) {
+    var idx = pair.indexOf('=');
+    if (idx === -1) return;
+    var k = pair.slice(0, idx).trim();
+    var v = pair.slice(idx + 1).trim();
+    if (k) out[k] = v;
+  });
+  return out;
+}
+
+function findInCatalog(catalog, instr) {
+  if (!catalog) return { matchType: 'no-catalog' };
+  var wantedName = normalizeName(instr.component);
+  if (instr.libraryComponentKey) {
+    return { matchType: 'instr-key', key: instr.libraryComponentKey, kind: 'component' };
+  }
+  for (var i = 0; i < catalog.componentSets.length; i++) {
+    if (normalizeName(catalog.componentSets[i].name) === wantedName) {
+      return { matchType: 'set-name', key: catalog.componentSets[i].key, kind: 'set' };
+    }
+  }
+  for (var j = 0; j < catalog.components.length; j++) {
+    var c = catalog.components[j];
+    if (c.componentSetId) continue;
+    if (normalizeName(c.name) === wantedName) {
+      return { matchType: 'component-name', key: c.key, kind: 'component' };
+    }
+  }
+  for (var k = 0; k < catalog.components.length; k++) {
+    if (normalizeName(catalog.components[k].name) === wantedName) {
+      return { matchType: 'component-variant-name', key: catalog.components[k].key, kind: 'component' };
+    }
+  }
+  return { matchType: 'missing' };
+}
+
+async function importFromCatalog(match) {
+  if (!match || !match.key) return null;
+  try {
+    if (match.kind === 'set') {
+      var set = await figma.importComponentSetByKeyAsync(match.key);
+      return { node: set.defaultVariant || set, isSet: true, set: set };
+    }
+    var comp = await figma.importComponentByKeyAsync(match.key);
+    return { node: comp, isSet: false };
+  } catch (e) {
+    return null;
+  }
+}
+
+function extractCoordinatesFromTsx(tsxText, componentName) {
+  var coords = { x: 0, y: 0, width: 0, height: 0, found: false };
+  if (!tsxText) return coords;
+  var lines = tsxText.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].indexOf('data-ds-component="' + componentName + '"') === -1) continue;
+    var block = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 6)).join(' ');
+    var left = block.match(/left[:\s]+(\d+)/);
+    var top = block.match(/top[:\s]+(\d+)/);
+    var w = block.match(/width[:\s]+(\d+)/);
+    var h = block.match(/height[:\s]+(\d+)/);
+    if (left) { coords.x = parseInt(left[1], 10); coords.found = true; }
+    if (top) { coords.y = parseInt(top[1], 10); coords.found = true; }
+    if (w) coords.width = parseInt(w[1], 10);
+    if (h) coords.height = parseInt(h[1], 10);
+    break;
+  }
+  return coords;
+}
+
+async function parseInstructions(usageJson, tsxText) {
+  var catalog = await figma.clientStorage.getAsync(STORAGE_CATALOG);
+  var instructions = (usageJson && usageJson.instructions) || [];
+  var preview = instructions.map(function (instr) {
+    var coords = (instr.placement && (instr.placement.width || instr.placement.height))
+      ? instr.placement
+      : extractCoordinatesFromTsx(tsxText, instr.component);
+    var match = findInCatalog(catalog, instr);
+    return {
+      component: instr.component,
+      variantPath: instr.variantPath || '',
+      placement: {
+        x: (coords && coords.x) || 0,
+        y: (coords && coords.y) || 0,
+        width: (coords && coords.width) || 320,
+        height: (coords && coords.height) || 48
+      },
+      props: instr.props || {},
+      libraryComponentKey: instr.libraryComponentKey || null,
+      matchType: match.matchType,
+      matchKey: match.key || null,
+      matchKind: match.kind || null
+    };
+  });
+  return {
+    hasCatalog: !!catalog,
+    screen: (usageJson && usageJson.screen) || 'DS Mapped Screen',
+    width: (usageJson && usageJson.width) || 0,
+    height: (usageJson && usageJson.height) || 0,
+    mode: (usageJson && usageJson.mode) || '',
+    instructions: preview
+  };
+}
+
+async function setTextContent(node, text) {
+  if (!node.findAll) return;
+  var textNodes = node.findAll(function (n) { return n.type === 'TEXT'; });
+  if (!textNodes.length) return;
+  var t = textNodes[0];
+  try {
+    await figma.loadFontAsync(t.fontName);
+    t.characters = String(text);
+  } catch (e) {}
+}
+
+async function buildScreen(payload) {
+  var instructions = payload.instructions || [];
+  var screenshotBytes = payload.screenshotBytes;
+  var width = payload.width || 375;
+  var height = payload.height || 812;
+  var mode = payload.mode || '';
+  var screenName = payload.screenName || 'DS Mapped Screen';
+
+  var frame = figma.createFrame();
+  frame.name = screenName;
+  frame.resize(width, height);
+  frame.layoutMode = 'NONE';
+  frame.clipsContent = true;
+
+  if (screenshotBytes && screenshotBytes.length) {
+    var imageHash = figma.createImage(screenshotBytes).hash;
+    frame.fills = [{ type: 'IMAGE', imageHash: imageHash, scaleMode: 'FILL' }];
+  }
+  frame.x = figma.viewport.center.x - width / 2;
+  frame.y = figma.viewport.center.y - height / 2;
+  figma.currentPage.appendChild(frame);
+
+  var placed = 0, missing = 0, errors = [];
+
+  for (var i = 0; i < instructions.length; i++) {
+    var instr = instructions[i];
+    var coords = instr.placement || { x: 0, y: 0, width: 320, height: 48 };
+    var match = { matchType: instr.matchType, key: instr.matchKey, kind: instr.matchKind };
+    var imported = match.key ? await importFromCatalog(match) : null;
+
+    if (imported && imported.node) {
+      var instance = imported.node.createInstance();
+      var variantProps = parseVariantPath(instr.variantPath);
+      if (mode) variantProps.Mode = mode;
+      try { instance.setProperties(variantProps); } catch (e) {}
+      if (instr.props && instr.props.label) {
+        await setTextContent(instance, instr.props.label);
+      }
+      instance.x = coords.x;
+      instance.y = coords.y;
+      try { instance.resize(coords.width, coords.height); } catch (e) {}
+      instance.setPluginData('ds-component', instr.component);
+      instance.setPluginData('ds-variant', instr.variantPath || '');
+      instance.setPluginData('ds-match-type', instr.matchType || '');
+      frame.appendChild(instance);
+      placed += 1;
+    } else {
+      var ph = figma.createFrame();
+      ph.name = '[MISSING] ' + instr.component;
+      ph.resize(Math.max(1, coords.width), Math.max(1, coords.height));
+      ph.x = coords.x;
+      ph.y = coords.y;
+      ph.fills = [{ type: 'SOLID', color: { r: 1, g: 0.85, b: 0.85 }, opacity: 0.6 }];
+      ph.strokes = [{ type: 'SOLID', color: { r: 0.85, g: 0.1, b: 0.1 } }];
+      ph.strokeWeight = 1;
+      frame.appendChild(ph);
+      missing += 1;
+      errors.push(instr.component + ' (' + (instr.matchType || 'unresolved') + ')');
+    }
+  }
+
+  figma.viewport.scrollAndZoomIntoView([frame]);
+  return { placed: placed, missing: missing, errors: errors };
+}
+
 // ---------- bootstrap ----------
 async function bootstrap() {
   var token = await figma.clientStorage.getAsync(STORAGE_TOKEN);
@@ -180,10 +368,8 @@ figma.ui.onmessage = async function (msg) {
       var catalog = await fetchLibraryCatalog(fileKey, token);
       await figma.clientStorage.setAsync(STORAGE_CATALOG, catalog);
       var summary = {
-        fileKey: catalog.fileKey,
-        fileName: catalog.fileName,
-        lastModified: catalog.lastModified,
-        fetchedAt: catalog.fetchedAt,
+        fileKey: catalog.fileKey, fileName: catalog.fileName,
+        lastModified: catalog.lastModified, fetchedAt: catalog.fetchedAt,
         componentCount: catalog.components.length,
         componentSetCount: catalog.componentSets.length,
         styleCount: catalog.styles.length
@@ -200,6 +386,17 @@ figma.ui.onmessage = async function (msg) {
       var attached = await listAttached(msg.scope === 'file' ? 'file' : 'page');
       post('attached', { attached: attached });
       post('status', { message: 'Rescanned.' });
+    } else if (msg.type === 'parse-files') {
+      var parsed = await parseInstructions(msg.usageJson, msg.tsxText);
+      post('parsed-instructions', parsed);
+      post('status', { message: parsed.hasCatalog
+        ? 'Parsed ' + parsed.instructions.length + ' instructions against cached catalog.'
+        : 'Parsed but no catalog cached — fetch the library first.' });
+    } else if (msg.type === 'build-screen') {
+      post('status', { message: 'Building screen…' });
+      var result = await buildScreen(msg);
+      post('build-complete', result);
+      post('status', { message: 'Placed ' + result.placed + ', missing ' + result.missing + '.' });
     } else if (msg.type === 'close') {
       figma.closePlugin();
     }
@@ -211,3 +408,4 @@ figma.ui.onmessage = async function (msg) {
 bootstrap().catch(function (e) {
   post('status', { message: 'Error: ' + (e && e.message ? e.message : String(e)) });
 });
+
