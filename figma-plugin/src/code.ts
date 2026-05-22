@@ -55,6 +55,7 @@ interface BuildReport {
   missing: string[];
   approximate: string[];
   mdVersion: string;
+  customCount?: number;
 }
 
 // Known section ordering for SM screens — falls back to first-seen order
