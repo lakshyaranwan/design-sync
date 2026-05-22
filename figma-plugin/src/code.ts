@@ -465,7 +465,12 @@ async function buildScreen(
   manifest: UsageManifest,
   instructions: PlacementInstruction[],
   targetFrame: FrameNode | null,
-  options: { width: number; height: number; mode: 'Light' | 'Dark' },
+  options: {
+    width: number;
+    height: number;
+    mode: 'Light' | 'Dark';
+    customInstructions?: CustomRenderInstruction[];
+  },
 ): Promise<BuildReport> {
   // Split into multiple frames if height limit exceeded
   const MAX_HEIGHT = 10000;
