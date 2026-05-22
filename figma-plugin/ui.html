@@ -354,9 +354,9 @@
       const s = $('summary');
       s.style.display = '';
       s.innerHTML =
-        `<strong>Built:</strong> ${payload.exactMatch + payload.nameMatch} components · ` +
-        `<strong>Missing:</strong> ${payload.missing.length} · ` +
-        `<strong>Approx:</strong> ${payload.approximate.length}`;
+        `<strong>DS linked:</strong> ${payload.exactMatch + payload.nameMatch} · ` +
+        `<strong>DS missing:</strong> ${payload.missing.length} · ` +
+        `<strong>Custom nodes:</strong> ${payload.customCount ?? 0}`;
     }
 
     if (type === 'error') {
