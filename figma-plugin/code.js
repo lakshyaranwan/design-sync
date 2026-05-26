@@ -147,9 +147,15 @@ function normalizeName(s) {
 }
 
 function parseVariantPath(variantPath) {
+  // Supports key=value pair format: "Style=Primary, Size=Large".
+  // Slash-joined paths like "Button/Primary/Large/Icon Left" have no
+  // property names so we cannot safely map them to setProperties() —
+  // return {} and rely on figmaNodeId resolution upstream.
   var out = {};
   if (!variantPath) return out;
-  String(variantPath).split(',').forEach(function (pair) {
+  var s = String(variantPath);
+  if (s.indexOf('=') === -1) return out;
+  s.split(',').forEach(function (pair) {
     var idx = pair.indexOf('=');
     if (idx === -1) return;
     var k = pair.slice(0, idx).trim();
